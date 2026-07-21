@@ -20,6 +20,7 @@ import shutil
 import signal
 import sys
 import termios
+import textwrap
 import threading
 import time
 import tty
@@ -42,6 +43,8 @@ DEFAULT_CONFIG = {
     "density": 0.75,
     "speed": 1.0,
     "focus": False,
+    "theme": "auto",        # "auto" adopts the active Omarchy theme; "matrix" forces green
+    "show_source": False,   # append the domain after each headline
     "ascii_only": False,
     "env_files": ["~/dev/tom-os/.env", "~/dev/exa-newsdesk/.env"],
 }
@@ -326,8 +329,8 @@ class Newsfeed(threading.Thread):
             if not title or title.casefold() in seen:
                 continue
             seen.add(title.casefold())
-            text = f"{title}  ·  {domain}" if domain else title
-            out.append({"text": text, "url": url, "kind": kind})
+            text = f"{title}  ·  {domain}" if domain and self.cfg.get("show_source") else title
+            out.append({"text": text, "url": url, "domain": domain, "kind": kind})
         return out
 
     def fetch(self):
@@ -382,7 +385,71 @@ def sgr(*codes):
     return "\x1b[" + ";".join(map(str, codes)) + "m"
 
 
-def build_palette(basic=False, focus=False):
+OMARCHY_THEME = Path.home() / ".config" / "omarchy" / "current" / "theme"
+
+
+def _hex_rgb(s):
+    s = s.lstrip("#")
+    return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+
+def _mix(a, b, f):
+    return tuple(round(a[i] + (b[i] - a[i]) * f) for i in range(3))
+
+
+def _fg(rgb, *pre):
+    return sgr(0, *pre, 38, 2, *rgb)
+
+
+def load_omarchy_colors():
+    """Colors of the active Omarchy theme (from its alacritty.toml), or None."""
+    try:
+        import tomllib
+        data = tomllib.loads((OMARCHY_THEME / "alacritty.toml").read_text())
+        c = data["colors"]
+        bright = c.get("bright", {})
+        return {
+            "name": OMARCHY_THEME.resolve().name,
+            "bg": _hex_rgb(c["primary"]["background"]),
+            "fg": _hex_rgb(c["primary"]["foreground"]),
+            "green": _hex_rgb(c["normal"]["green"]),
+            "bgreen": _hex_rgb(bright.get("green", c["normal"]["green"])),
+            "yellow": _hex_rgb(c["normal"]["yellow"]),
+            "cyan": _hex_rgb(c["normal"]["cyan"]),
+            "bwhite": _hex_rgb(bright.get("white", c["primary"]["foreground"])),
+        }
+    except Exception:
+        return None
+
+
+def build_theme_palette(t, focus=False):
+    """Truecolor palette derived from an Omarchy theme: the rain runs in the
+    theme's green, fading toward its background; text sits in theme colors."""
+    bg, green, fgc = t["bg"], t["green"], t["fg"]
+
+    def g(f):
+        return _fg(_mix(green, bg, f))
+
+    pal = {
+        "head": _fg(t["bwhite"], 1),
+        "trail": [g(0.0), g(0.15), g(0.35), g(0.55), g(0.7), g(0.8)],
+        "residue": [g(0.6), g(0.72), g(0.8), _fg(_mix(fgc, bg, 0.85))],
+        "reader": _fg(_mix(fgc, bg, 0.12)),
+        "dim": _fg(_mix(fgc, bg, 0.5)),
+        "blank": sgr(0),
+    }
+    if focus:
+        pal.update(news=_fg(fgc, 1), local=_fg(t["cyan"], 1),
+                   poetic=_fg(t["yellow"]), scramble=_fg(t["bwhite"], 1))
+    else:
+        pal.update(news=_fg(_mix(green, fgc, 0.45)), local=_fg(_mix(t["cyan"], bg, 0.2)),
+                   poetic=_fg(_mix(t["yellow"], bg, 0.2)), scramble=_fg(t["bgreen"], 1))
+    return pal
+
+
+def build_palette(basic=False, focus=False, theme=None):
+    if theme and not basic:
+        return build_theme_palette(theme, focus)
     """focus=False: messages sit embedded in the code, a shade above the field.
     focus=True: headlines surface — bright white, full contrast."""
     if not basic:
@@ -392,6 +459,7 @@ def build_palette(basic=False, focus=False):
                       sgr(0, 38, 5, 28), sgr(0, 38, 5, 22), sgr(0, 2, 38, 5, 22)],
             "residue": [sgr(0, 38, 5, 22), sgr(0, 2, 38, 5, 28),
                         sgr(0, 2, 38, 5, 22), sgr(0, 2, 38, 5, 235)],
+            "reader": sgr(0, 38, 5, 250),
             "dim": sgr(0, 38, 5, 241),
             "blank": sgr(0),
         }
@@ -407,6 +475,7 @@ def build_palette(basic=False, focus=False):
         "head": sgr(0, 1, 32),
         "trail": [sgr(0, 1, 32), g, g, gd, gd, gd],
         "residue": [gd],
+        "reader": sgr(0, 37),
         "dim": sgr(0, 2, 37),
         "blank": sgr(0),
     }
@@ -601,11 +670,12 @@ HELP = [
     " meanwhile — things happening right now ",
     "",
     "  q        quit              space   pause",
-    "  n        a headline now    o       something true now",
+    "  enter    read an article   n       a headline now",
     "  t        edit topics       g       edit places (local intel)",
-    "  f        focus mode        m       toggle news",
-    "  p        toggle poetic     r       refresh headlines",
-    "  + / -    speed             s       status bar",
+    "  f        focus mode        o       something true now",
+    "  m        toggle news       p       toggle poetic",
+    "  + / -    speed             r       refresh headlines",
+    "  s        status bar        ?       help",
     "",
     "  in editors: type + enter adds · 1-9 removes · esc closes",
     "",
@@ -620,7 +690,9 @@ class App:
         self.feed = feed
         self.basic = "256" not in os.environ.get("TERM", "") and not os.environ.get("COLORTERM")
         self.focus = bool(cfg.get("focus", False))
-        self.pal = build_palette(self.basic, self.focus)
+        self.theme_colors = load_omarchy_colors() if cfg.get("theme", "auto") == "auto" else None
+        self.theme_mtime = self._theme_mtime()
+        self.pal = build_palette(self.basic, self.focus, self.theme_colors)
         self.glyphs = GLYPHS_ASCII if cfg["ascii_only"] else GLYPHS_KATA
         self.h, self.w = term.h, term.w
         self.streams = []
@@ -634,12 +706,36 @@ class App:
         self.show_status = False
         self.show_help = False
         self.editor = None  # {"kind": "topics"|"places", "input": str, "pending": bytes}
-        self.panel_rect = None  # (y0, x0, y1, x1) of help/editor overlay
+        self.picker = False           # choosing a headline to read
+        self.reader = None            # {"title", "domain", "lines", "top"} article overlay
+        self.reader_pending = None    # set by the fetch thread, consumed by the UI loop
+        self.shown_links = []         # recent on-screen headlines, newest first
+        self.panel_rect = None  # (y0, x0, y1, x1) of help/editor/picker overlay
         self.news_on = True
         self.poetic_on = True
         self.toast = ("", 0.0)
         self.resized = False
         self._spans = {}
+
+    # -- omarchy live theming ----------------------------------------------
+    def _theme_mtime(self):
+        try:
+            return os.lstat(OMARCHY_THEME).st_mtime
+        except OSError:
+            return None
+
+    def check_theme(self, t):
+        if self.cfg.get("theme", "auto") != "auto":
+            return
+        mtime = self._theme_mtime()
+        if mtime == self.theme_mtime:
+            return
+        self.theme_mtime = mtime
+        self.theme_colors = load_omarchy_colors()
+        self.pal = build_palette(self.basic, self.focus, self.theme_colors)
+        self.term.out("\x1b[2J")
+        if self.theme_colors:
+            self.flash(f"theme: {self.theme_colors['name']}", t)
 
     # -- guard: cells that field/streams must not overwrite ----------------
     def guard(self, row, x):
@@ -686,6 +782,9 @@ class App:
         item = self.next_headline() if kind == "news" else None
         if item is not None:
             text, url, kind = item["text"], item.get("url"), item.get("kind", "news")
+            if url:
+                self.shown_links = ([{"text": text, "url": url, "domain": item.get("domain", "")}]
+                                    + [l for l in self.shown_links if l["url"] != url])[:9]
         else:
             if kind == "news" and not (self.poetic_on or force):
                 return
@@ -726,8 +825,15 @@ class App:
         self._spans = {}
         for m in self.messages:
             self._spans.setdefault(m.row, []).append(m.span_range())
-        if self.show_help or self.editor:
+        if self.reader_pending:
+            self.mount_reader()
+        if self.reader:
+            rect = self.reader_rect()
+        elif self.show_help or self.editor or self.picker:
             rect = self.compute_panel_rect()
+        else:
+            rect = None
+        if rect:
             if self.panel_rect and rect != self.panel_rect:
                 self.clear_rect(self.panel_rect)
             self.panel_rect = rect
@@ -752,13 +858,93 @@ class App:
         msg, until = self.toast
         if msg and t < until:
             term.span(self.h - 1, max(0, self.w - len(msg) - 3), pal["dim"], f" {msg} ")
-        if self.show_help or self.editor:
+        if self.show_help or self.editor or self.picker:
             self.draw_panel()
+        if self.reader:
+            self.draw_reader()
         term.flush()
+
+    # -- the reader: read an article without leaving the rain ---------------
+    def open_article(self, link, t):
+        self.flash(f"decoding {link['domain'] or 'article'}…", t)
+
+        def fetch():
+            try:
+                body = {"ids": [link["url"]], "text": True, "livecrawl": "fallback"}
+                req = urllib.request.Request(
+                    "https://api.exa.ai/contents",
+                    data=json.dumps(body).encode(),
+                    headers={"x-api-key": self.feed.api_key or "",
+                             "content-type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=25) as resp:
+                    results = json.loads(resp.read()).get("results", [])
+                r = results[0] if results else {}
+                self.reader_pending = {
+                    "title": clean_title(r.get("title")) or link["text"],
+                    "domain": link["domain"],
+                    "text": (r.get("text") or "").strip() or "(no text could be extracted)",
+                }
+            except Exception:
+                self.reader_pending = {"title": link["text"], "domain": link["domain"],
+                                       "text": "(could not fetch the article — "
+                                               "the headline is still a clickable link)"}
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def mount_reader(self):
+        art, self.reader_pending = self.reader_pending, None
+        width = min(self.w - 12, 84)
+        lines = []
+        for para in art["text"].split("\n"):
+            para = para.strip()
+            if not para:
+                continue
+            lines.extend(textwrap.wrap(para, width=width - 6) or [""])
+            lines.append("")
+        self.reader = {"title": art["title"], "domain": art["domain"],
+                       "lines": lines, "top": 0, "width": width}
+        self.picker = False
+        self.panel_rect = None
+        self.term.out("\x1b[2J")
+
+    def reader_rect(self):
+        width = self.reader["width"]
+        x0 = max(0, (self.w - width) // 2)
+        return (1, x0, self.h - 2, min(self.w - 2, x0 + width - 1))
+
+    def draw_reader(self):
+        y0, x0, y1, x1 = self.panel_rect
+        bw = x1 - x0 + 1
+        rd = self.reader
+        for y in range(y0, y1 + 1):
+            self.term.span(y, x0, self.pal["blank"], " " * bw)
+        title = f" {rd['title']} "[: bw - 4]
+        src = f" {rd['domain']} " if rd["domain"] else ""
+        self.term.span(y0 + 1, x0 + 2, self.pal["news"], title)
+        if src:
+            self.term.span(y0 + 2, x0 + 2, self.pal["dim"], src[: bw - 4])
+        body_top = y0 + 4
+        body_h = y1 - body_top - 1
+        visible = rd["lines"][rd["top"]: rd["top"] + body_h]
+        for i, line in enumerate(visible):
+            self.term.span(body_top + i, x0 + 3, self.pal["reader"], line[: bw - 6])
+        more = len(rd["lines"]) - rd["top"] - body_h
+        foot = f" j/k scroll{f' · {more} lines below' if more > 0 else ''} · q closes "
+        self.term.span(y1, x0 + 2, self.pal["dim"], foot[: bw - 4])
 
     def panel_lines(self):
         if self.show_help:
             return HELP
+        if self.picker:
+            lines = [" ▚ read — pick a headline ", ""]
+            for i, l in enumerate(self.shown_links, 1):
+                mark = f"{l['domain']}" if l["domain"] else ""
+                lines.append(f"   {i}  {l['text'][:70]}")
+                if mark:
+                    lines.append(f"      {mark}")
+            lines += ["", "   1-9 opens the article here · esc closes"]
+            return lines
         ed = self.editor
         kind = ed["kind"]
         title = (" ◈ topics — what the news feed follows "
@@ -786,8 +972,10 @@ class App:
         bw = x1 - x0 + 1
         for i in range(y1 - y0 + 1):
             self.term.span(y0 + i, x0, self.pal["blank"], " " * bw)
-        accent = self.pal["news"] if self.show_help else (
-            self.pal["local"] if self.editor["kind"] == "places" else self.pal["poetic"])
+        if self.editor:
+            accent = self.pal["local"] if self.editor["kind"] == "places" else self.pal["poetic"]
+        else:
+            accent = self.pal["news"]
         for i, s in enumerate(self.panel_lines()):
             attr = accent if i == 0 or s.lstrip().startswith("▸") else self.pal["dim"]
             self.term.span(y0 + 1 + i, x0 + 2, attr, s[: bw - 3])
@@ -800,6 +988,8 @@ class App:
     def close_panel(self):
         self.editor = None
         self.show_help = False
+        self.picker = False
+        self.reader = None
         self.panel_rect = None
         self.term.out("\x1b[2J")  # let the field rebuild — a small reboot
 
@@ -812,6 +1002,30 @@ class App:
     # -- input -------------------------------------------------------------
     def handle_bytes(self, data, t):
         for b in data:
+            if self.reader is not None:
+                rd = self.reader
+                page = max(1, (self.panel_rect[2] - self.panel_rect[0]) - 5)
+                if b in (ord("q"), 27):
+                    self.close_panel()
+                    return True
+                elif b in (ord("j"), ord("\x0e")):
+                    rd["top"] = min(max(0, len(rd["lines"]) - page), rd["top"] + 1)
+                elif b == ord("k"):
+                    rd["top"] = max(0, rd["top"] - 1)
+                elif b in (ord(" "), ord("d")):
+                    rd["top"] = min(max(0, len(rd["lines"]) - page), rd["top"] + page)
+                elif b == ord("u"):
+                    rd["top"] = max(0, rd["top"] - page)
+                continue
+            if self.picker:
+                if 0x31 <= b <= 0x39 and int(chr(b)) <= len(self.shown_links):
+                    self.open_article(self.shown_links[int(chr(b)) - 1], t)
+                    self.picker = False
+                    self.panel_rect = None
+                    self.term.out("\x1b[2J")
+                else:
+                    self.close_panel()
+                continue
             if self.editor is not None:
                 ed = self.editor
                 entries = self.cfg[ed["kind"]]
@@ -863,13 +1077,18 @@ class App:
             elif b == ord("f"):
                 self.focus = not self.focus
                 self.cfg["focus"] = self.focus
-                self.pal = build_palette(self.basic, self.focus)
+                self.pal = build_palette(self.basic, self.focus, self.theme_colors)
                 save_config(self.cfg)
                 self.flash("focus — text surfaced" if self.focus else "embedded — text set back", t)
             elif b == ord("t"):
                 self.editor = {"kind": "topics", "input": "", "pending": b""}
             elif b == ord("g"):
                 self.editor = {"kind": "places", "input": "", "pending": b""}
+            elif b in (13, 10, ord("l")):
+                if self.shown_links:
+                    self.picker = True
+                else:
+                    self.flash("no headlines on screen yet", t)
             elif b == ord("m"):
                 self.news_on = not self.news_on
                 self.flash(f"news {'on' if self.news_on else 'off'}", t)
@@ -899,9 +1118,13 @@ class App:
         self.term.enter()
         try:
             last = time.monotonic()
+            frame = 0
             while True:
                 t = time.monotonic()
                 dt, last = min(t - last, 0.1), t
+                frame += 1
+                if frame % 90 == 0:
+                    self.check_theme(t)
                 if self.resized:
                     self.resized = False
                     self.term.resize()
