@@ -24,9 +24,9 @@ makepkg -si            # local test install: builds and installs the package
 3. Publish:
 
 ```sh
-git clone ssh://aur@aur.archlinux.org/meanwhile.git /tmp/aur-meanwhile
-cp PKGBUILD .SRCINFO /tmp/aur-meanwhile/
-cd /tmp/aur-meanwhile && git add -A && git commit -m "meanwhile 0.4.0" && git push
+git clone ssh://aur@aur.archlinux.org/meanwhile-rain.git /tmp/aur-meanwhile-rain
+cp PKGBUILD .SRCINFO /tmp/aur-meanwhile-rain/
+cd /tmp/aur-meanwhile-rain && git add -A && git commit -m "meanwhile-rain 0.4.0" && git push
 ```
 
 Later releases: bump `pkgver`, redo the checksum + .SRCINFO, commit, push.

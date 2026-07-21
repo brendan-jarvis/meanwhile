@@ -38,8 +38,8 @@ ln -sf "$PWD/meanwhile.py" ~/.local/bin/meanwhile
 meanwhile
 ```
 
-On Arch, an AUR package (`meanwhile`) is on its way — the PKGBUILD lives
-in [packaging/aur](packaging/aur).
+On Arch: `yay -S meanwhile-rain` (the plain name was taken by the old
+Lotus Sametime library, of all things).
 
 News comes from the [Exa](https://exa.ai) search API (`fast` type — their
 cheapest tier, a few requests per refresh). Put `EXA_API_KEY` in your

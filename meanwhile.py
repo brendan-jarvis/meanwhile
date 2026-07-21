@@ -29,7 +29,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-VERSION = "0.2.0"
+VERSION = "0.4.0"
 CONFIG_PATH = Path.home() / ".config" / "meanwhile" / "config.json"
 CACHE_PATH = Path.home() / ".cache" / "meanwhile" / "headlines.json"
 
@@ -655,6 +655,7 @@ class Message:
     def __init__(self, text, kind, url, row, width, t, x0=None, delay=0.0):
         self.text, self.kind, self.url, self.row = text, kind, url, row
         self.domain = ""
+        self.group = None  # summary-block id; lets a story be dismissed as one
         if x0 is None:
             x0 = random.randint(1, max(1, width - len(text) - 2))
         self.x0 = max(1, min(x0, max(1, width - len(text) - 2)))
@@ -726,6 +727,7 @@ HELP = [
     "  s        status bar        ?       help",
     "",
     "  in editors: type + enter adds · 1-9 removes · esc closes",
+    "  a decoded story dissolves on its own · esc or a click hurries it",
     "",
     "  any other key closes help",
 ]
@@ -757,6 +759,7 @@ class App:
         self.picker = None            # {"sel": int} while choosing a headline to decode
         self.reader_pending = None    # (request_token, summary) set by the fetch thread
         self.reader_req = 0           # supersedes stale in-flight fetches
+        self.block_seq = 0            # summary-block group ids
         self.wake = None              # the rain speaking; see WAKE
         self.shown_links = []         # recent on-screen headlines, newest first
         self.panel_rect = None  # (y0, x0, y1, x1) of help/editor/picker overlay
@@ -1010,18 +1013,29 @@ class App:
             r0 = 1
             self.messages = [m for m in self.messages if not (r0 <= m.row < r0 + k)]
         x0 = max(2, (self.w - width) // 2 + random.randint(-6, 6))
+        self.block_seq += 1
         for i, (text, kind) in enumerate(block):
             m = Message(text, kind, art["url"] if kind == "news" else None,
                         r0 + i, self.w, t, x0=x0, delay=0.35 * i)
             m.domain = art.get("domain", "")
+            m.group = self.block_seq
             m.dwell = 10.0 + 0.03 * len(art["summary"])
             self.messages.append(m)
 
+    def dismiss_summaries(self, group=None):
+        for m in self.messages:
+            if m.group is not None and (group is None or m.group == group):
+                m.phase = "erase"
+
     def click(self, x, y, t):
         for m in self.messages:
-            if m.row == y and m.url and m.x0 <= x < m.x0 + len(m.text):
-                self.open_summary({"text": m.text, "url": m.url, "domain": m.domain}, t)
-                return
+            if m.row == y and m.x0 - 1 <= x <= m.x0 + len(m.text):
+                if m.group is not None:
+                    self.dismiss_summaries(m.group)  # click a story again to dissolve it
+                    return
+                if m.url:
+                    self.open_summary({"text": m.text, "url": m.url, "domain": m.domain}, t)
+                    return
 
     def panel_lines(self):
         if self.show_help:
@@ -1193,7 +1207,12 @@ class App:
                     return False
                 self.close_panel()
                 continue
-            if b in (ord("q"), 27):
+            if b == 27:
+                if any(m.group is not None and m.phase != "erase" for m in self.messages):
+                    self.dismiss_summaries()  # esc dissolves open stories first
+                    continue
+                return False
+            if b == ord("q"):
                 return False
             if b == ord(" "):
                 self.paused = not self.paused
