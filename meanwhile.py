@@ -53,45 +53,77 @@ GLYPHS_KATA = "ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺ�
 GLYPHS_ASCII = "abcdefghijklmnopqrstuvwxyz0123456789@#$%&*+=<>:~"
 SCRAMBLE = 4  # cells of un-decoded shimmer at a message head
 
-POETIC = [
-    "right now, about a million people are in the air",
-    "the light warming earth at this moment left the sun eight minutes ago",
-    "a photon born in the sun's core wandered a hundred thousand years to its surface — then took eight minutes to reach you",
-    "about two thousand thunderstorms are rolling across the planet right now",
-    "tonight the moon pulls a tide across every shore on earth",
-    "the ISS circles the earth every 92 minutes; its crew sees sixteen sunrises a day",
-    "somewhere, a baby just took their first breath",
-    "somewhere, a library just opened for the morning",
-    "every second, the sun turns four million tonnes of itself into light",
-    "somewhere, rain that fell a thousand years ago is melting out of a glacier",
-    "there are more trees on earth than stars in the milky way",
-    "mount everest grows about four millimetres taller every year",
-    "the moon drifts 3.8 centimetres farther from earth every year, and still it holds the tides",
-    "somewhere in california, a tree older than the pyramids is quietly adding a ring",
-    "beneath your feet spins an iron core nearly the size of the moon",
-    "the amazon is pouring a fifth of all the world's river water into the atlantic right now",
-    "about a hundred tonnes of stardust will settle on the earth today",
-    "somewhere, two people who will love each other haven't met yet",
-    "in the arctic, greenland sharks born before newton are still swimming",
-    "east of the dateline it is yesterday; west of it, tomorrow is already underway",
-    "right now, someone is laughing so hard they can't breathe",
-    "eight billion hearts are beating at this moment, hardly any of them in step",
-    "the wheat in your last meal was sown by someone you will never meet",
-    "somewhere, a night-shift nurse is checking on a ward of sleeping strangers",
-    "satellites are photographing the earth right now; you may be in one of the pictures",
-    "the pole star's light arriving tonight left it around the year 1600",
-    "on the day side of earth, four billion people are going about their morning",
-    "somewhere, a fisherman is hauling nets under stars you have never seen",
-    "there is a desert where it has not rained in five hundred years; it is probably sunny there today",
-    "deep in a swedish forest, a spruce root system has been alive for nine and a half thousand years",
-    "the atoms in your left hand and your right were forged in different stars",
-    "a message in a bottle is floating somewhere at sea right now",
-    "somewhere, a teacher just watched an idea land",
-    "half the oxygen in your next breath came from the ocean",
-    "bar-tailed godwits can fly eleven days across the pacific without landing once",
-    "somewhere, an orchestra is tuning to the same A it has been for two centuries",
-    "every wave that has ever reached a shore was already old when it arrived",
-]
+POETIC = {
+    "sky": [
+        "the light warming earth at this moment left the sun eight minutes ago",
+        "a photon born in the sun's core wandered a hundred thousand years to its surface — then took eight minutes to reach you",
+        "about two thousand thunderstorms are rolling across the planet right now",
+        "every second, the sun turns four million tonnes of itself into light",
+        "the moon drifts 3.8 centimetres farther from earth every year, and still it holds the tides",
+        "about a hundred tonnes of stardust will settle on the earth today",
+        "the pole star's light arriving tonight left it around the year 1600",
+        "the ISS circles the earth every 92 minutes; its crew sees sixteen sunrises a day",
+        "satellites are photographing the earth right now; you may be in one of the pictures",
+        "about ten thousand working satellites are over your head tonight",
+        "there are more trees on earth than stars in the milky way",
+        "the northern lights are on right now, whether anyone is standing under them or not",
+        "since the year 2000, there has never been a moment when every human being was on earth — someone is up there now",
+    ],
+    "sea": [
+        "half the oxygen in your next breath came from the ocean",
+        "the amazon is pouring a fifth of all the world's river water into the atlantic right now",
+        "a message in a bottle is floating somewhere at sea right now",
+        "every wave that has ever reached a shore was already old when it arrived",
+        "the tide is coming in somewhere, always",
+        "rain is falling on the open ocean right now, unwatched, in the middle of everything",
+        "on some abyssal plain, a fallen whale is feeding a community that will eat for decades",
+        "tonight the moon pulls a tide across every shore on earth",
+    ],
+    "deep time": [
+        "mount everest is being pushed a few millimetres higher every year",
+        "somewhere, rain that fell a thousand years ago is melting out of a glacier",
+        "somewhere in california, a tree older than the pyramids is quietly adding a ring",
+        "deep in a swedish forest, a spruce root system has been alive for nine and a half thousand years",
+        "in the arctic, greenland sharks born before newton are still swimming",
+        "beneath your feet spins an iron core nearly the size of the moon",
+        "there is a desert where it has not rained in five hundred years; it is probably sunny there today",
+        "the atlantic is about a coin's width wider than it was last year",
+        "the continents drift about as fast as your fingernails grow",
+        "somewhere in a cave, a stalactite just gained a drop; in a century it will show",
+    ],
+    "the body": [
+        "the atoms in your left hand and your right were forged in different stars",
+        "your body made about two million red blood cells in the last second",
+        "you will blink about twenty thousand times today and remember none of them",
+        "the iron in your blood was made in the death of a star",
+        "the surface of the earth is carrying you at hundreds of miles an hour, and you cannot feel it",
+    ],
+    "creatures": [
+        "bar-tailed godwits can fly eleven days across the pacific without landing once",
+        "somewhere over the southern ocean, an albatross is asleep on the wing",
+        "somewhere it is daytime, and a hummingbird's heart is doing twenty beats a second",
+        "right now, some four hundred million cats are asleep",
+        "an arctic tern sees more daylight than any creature on earth; one is in the light right now",
+    ],
+    "people": [
+        "right now, about a million people are in the air",
+        "somewhere, a baby just took their first breath",
+        "somewhere, a library just opened for the morning",
+        "somewhere, two people who will love each other haven't met yet",
+        "east of the dateline it is yesterday; west of it, tomorrow is already underway",
+        "right now, someone is laughing so hard they can't breathe",
+        "eight billion hearts are beating at this moment, hardly any of them in step",
+        "the wheat in your last meal was sown by someone you will never meet",
+        "somewhere, a night-shift nurse is checking on a ward of sleeping strangers",
+        "on the day side of earth, four billion people are going about their morning",
+        "somewhere, a fisherman is hauling nets under stars you have never seen",
+        "somewhere, a teacher just watched an idea land",
+        "somewhere, an orchestra is tuning to the same A it has been for two centuries",
+        "someone, somewhere, just finished the last page of their first novel",
+        "somewhere, two strangers just swapped seats so a family could sit together",
+        "somewhere, an apology twenty years late is finally being written",
+    ],
+}
 
 # lines that are only true in part of the year, keyed by month group
 SEASONAL = {
@@ -118,7 +150,7 @@ SEASONAL = {
 CITIES = [
     ("Apia", 13), ("Auckland", 12), ("Sydney", 10), ("Tokyo", 9),
     ("Shanghai", 8), ("Bangkok", 7), ("Dhaka", 6), ("Delhi", 5.5),
-    ("Dubai", 4), ("Nairobi", 3), ("Istanbul", 3), ("Cairo", 2),
+    ("Dubai", 4), ("Nairobi", 3), ("Istanbul", 3), ("Cairo", 3),
     ("Lagos", 1), ("London", 1), ("Reykjavik", 0), ("Praia", -1),
     ("Rio de Janeiro", -3), ("Buenos Aires", -3), ("Santiago", -4),
     ("New York", -4), ("Chicago", -5), ("Denver", -6),
@@ -178,7 +210,8 @@ def resolve_api_key(cfg):
 def moon_line():
     ref = datetime(2000, 1, 6, 18, 14, tzinfo=timezone.utc)  # a known new moon
     days = (datetime.now(timezone.utc) - ref).total_seconds() / 86400
-    phase = (days % 29.530588) / 29.530588
+    # the mean-synodic model lags the observed phase by about a third of a day
+    phase = ((days + 0.35) % 29.530588) / 29.530588
     illum = (1 - math.cos(2 * math.pi * phase)) / 2
     if phase < 0.03 or phase > 0.97:
         name = "new — all shadow"
@@ -196,7 +229,7 @@ def moon_line():
         name = "at last quarter"
     else:
         name = "a waning crescent"
-    return f"tonight the moon is {name}, {int(illum * 100)}% lit"
+    return f"tonight the moon is {name}, about {round(illum * 20) * 5}% lit"
 
 
 def poetic_line(started_at):
@@ -211,6 +244,8 @@ def poetic_line(started_at):
             f"the sun has carried you {int(elapsed * 29.8):,} km through space since you began watching",
             f"the earth has turned {elapsed * 360 / 86164:.2f} degrees since this began",
             f"your heart has beaten about {int(elapsed * 1.15):,} times while you watched",
+            f"you have blinked about {int(elapsed * 0.28):,} times since this began",
+            f"your body has made about {int(elapsed * 2.4):,} million red blood cells while you watched",
         ]
     month = datetime.now(timezone.utc).month
     for months, lines in SEASONAL.items():
@@ -231,7 +266,7 @@ def poetic_line(started_at):
             break
     if random.random() < 0.5:
         return random.choice(computed)
-    return random.choice(POETIC)
+    return random.choice(random.choice(list(POETIC.values())))
 
 
 def clean_title(raw):
@@ -443,7 +478,7 @@ def build_theme_palette(t, focus=False):
                    poetic=_fg(t["yellow"]), scramble=_fg(t["bwhite"], 1))
     else:
         pal.update(news=_fg(_mix(green, fgc, 0.45)), local=_fg(_mix(t["cyan"], bg, 0.2)),
-                   poetic=_fg(_mix(t["yellow"], bg, 0.2)), scramble=_fg(t["bgreen"], 1))
+                   poetic=_fg(_mix(t["yellow"], bg, 0.45)), scramble=_fg(t["bgreen"], 1))
     return pal
 
 
@@ -468,7 +503,7 @@ def build_palette(basic=False, focus=False, theme=None):
                        poetic=sgr(0, 38, 5, 222), scramble=sgr(0, 1, 38, 5, 231))
         else:
             pal.update(news=sgr(0, 38, 5, 120), local=sgr(0, 38, 5, 80),
-                       poetic=sgr(0, 38, 5, 179), scramble=sgr(0, 1, 38, 5, 83))
+                       poetic=sgr(0, 38, 5, 137), scramble=sgr(0, 1, 38, 5, 83))
         return pal
     g, gd = sgr(0, 32), sgr(0, 2, 32)
     pal = {
@@ -497,15 +532,17 @@ class Term:
         self.w, self.h = shutil.get_terminal_size()
         self.saved = None
 
-    def enter(self):
+    def enter(self, mouse=True):
         self.saved = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)
         self.out("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[2J")
+        if mouse:
+            self.out("\x1b[?1000h\x1b[?1006h")
         self.flush()
 
     def leave(self):
         self.buf.clear()
-        self.out("\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
+        self.out("\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
         self.flush()
         if self.saved:
             termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
@@ -615,12 +652,15 @@ class Noise:
 class Message:
     """A headline or poetic line that decodes out of the field, lingers, dissolves."""
 
-    def __init__(self, text, kind, url, row, width, t):
+    def __init__(self, text, kind, url, row, width, t, x0=None, delay=0.0):
         self.text, self.kind, self.url, self.row = text, kind, url, row
-        self.x0 = random.randint(1, max(1, width - len(text) - 2))
+        self.domain = ""
+        if x0 is None:
+            x0 = random.randint(1, max(1, width - len(text) - 2))
+        self.x0 = max(1, min(x0, max(1, width - len(text) - 2)))
         self.speed = random.uniform(32, 48)
         self.phase, self.phase_start = "reveal", t
-        self.head = 0.0
+        self.head = -delay * self.speed
         self.erase = 0.0
         self.dwell = 4.0 + 0.055 * len(text)
         self.done = False
@@ -642,7 +682,8 @@ class Message:
                 self.done = True
 
     def draw(self, term, t, pal, glyphs):
-        attr = {"news": pal["news"], "local": pal["local"]}.get(self.kind, pal["poetic"])
+        attr = {"news": pal["news"], "local": pal["local"],
+                "summary": pal["reader"]}.get(self.kind, pal["poetic"])
         n = len(self.text)
         if self.phase == "reveal":
             locked = min(n, int(self.head - SCRAMBLE))
@@ -655,7 +696,7 @@ class Message:
             term.span(self.row, self.x0 - 1, attr, " " + self.text + " ", self.url)
         else:
             gone = min(n, int(self.erase - SCRAMBLE))
-            for x in range(self.x0 - 1, self.x0 + gone):
+            for x in range(self.x0 - 1, self.x0 + gone + (2 if gone == n else 0)):
                 esc, ch = residue_at(self.row, x, t, glyphs, pal)
                 term.cell(self.row, x, esc, ch)
             for i in range(max(0, gone), min(n, int(self.erase))):
@@ -666,11 +707,18 @@ class Message:
                 term.span(self.row, self.x0 + start, attr, self.text[start:] + " ", self.url)
 
 
+WAKE = [
+    "Wake up, Neo...",
+    "The Matrix has you.",
+    "Follow the white rabbit.",
+    "Knock, knock, Neo.",
+]
+
 HELP = [
     " meanwhile — things happening right now ",
     "",
     "  q        quit              space   pause",
-    "  enter    read an article   n       a headline now",
+    "  click    decode a story    enter   pick one to decode",
     "  t        edit topics       g       edit places (local intel)",
     "  f        focus mode        o       something true now",
     "  m        toggle news       p       toggle poetic",
@@ -706,9 +754,10 @@ class App:
         self.show_status = False
         self.show_help = False
         self.editor = None  # {"kind": "topics"|"places", "input": str, "pending": bytes}
-        self.picker = False           # choosing a headline to read
-        self.reader = None            # {"title", "domain", "lines", "top"} article overlay
-        self.reader_pending = None    # set by the fetch thread, consumed by the UI loop
+        self.picker = None            # {"sel": int} while choosing a headline to decode
+        self.reader_pending = None    # (request_token, summary) set by the fetch thread
+        self.reader_req = 0           # supersedes stale in-flight fetches
+        self.wake = None              # the rain speaking; see WAKE
         self.shown_links = []         # recent on-screen headlines, newest first
         self.panel_rect = None  # (y0, x0, y1, x1) of help/editor/picker overlay
         self.news_on = True
@@ -730,12 +779,16 @@ class App:
         mtime = self._theme_mtime()
         if mtime == self.theme_mtime:
             return
+        new = load_omarchy_colors()
+        if new is None:
+            return  # keep the current palette; retry on the next check
         self.theme_mtime = mtime
-        self.theme_colors = load_omarchy_colors()
+        if new == self.theme_colors:
+            return
+        self.theme_colors = new
         self.pal = build_palette(self.basic, self.focus, self.theme_colors)
         self.term.out("\x1b[2J")
-        if self.theme_colors:
-            self.flash(f"theme: {self.theme_colors['name']}", t)
+        self.flash(f"theme: {new['name']}", t)
 
     # -- guard: cells that field/streams must not overwrite ----------------
     def guard(self, row, x):
@@ -780,10 +833,12 @@ class App:
             else:
                 kind = "poetic"
         item = self.next_headline() if kind == "news" else None
+        domain = ""
         if item is not None:
             text, url, kind = item["text"], item.get("url"), item.get("kind", "news")
+            domain = item.get("domain", "")
             if url:
-                self.shown_links = ([{"text": text, "url": url, "domain": item.get("domain", "")}]
+                self.shown_links = ([{"text": text, "url": url, "domain": domain}]
                                     + [l for l in self.shown_links if l["url"] != url])[:9]
         else:
             if kind == "news" and not (self.poetic_on or force):
@@ -802,34 +857,72 @@ class App:
             return
         spaced = [r for r in candidates if r - 1 not in taken and r + 1 not in taken]
         row = random.choice(spaced or candidates)
-        self.messages.append(Message(text, kind, url, row, self.w, t))
+        m = Message(text, kind, url, row, self.w, t)
+        m.domain = domain
+        self.messages.append(m)
+
+    # -- the rain speaking --------------------------------------------------
+    def trigger_wake(self, t):
+        self.close_panel()
+        self.streams = []
+        self.messages = []
+        self.wake = {"line": 0, "chars": 0.0, "pause_until": 0.0}
+
+    def tick_wake(self, t, dt):
+        w = self.wake
+        if t < w["pause_until"]:
+            if w.get("advance"):
+                w.update(advance=False, chars=0.0)
+            return
+        if w.get("advance"):
+            if w["line"] >= len(WAKE) - 1:
+                self.wake = None
+                self.term.out("\x1b[2J")
+                return
+            w.update(advance=False, line=w["line"] + 1, chars=0.0)
+            self.term.out("\x1b[2J")
+        line = WAKE[w["line"]]
+        if w["chars"] < len(line):
+            w["chars"] += 11 * dt
+            if w["chars"] >= len(line):
+                w["pause_until"] = t + (2.8 if w["line"] == len(WAKE) - 1 else 1.7)
+                w["advance"] = True
 
     # -- frame -------------------------------------------------------------
     def tick(self, t, dt):
+        if self.wake:
+            self.tick_wake(t, dt)
+            return
+        quiet = not (self.picker or self.editor or self.show_help)
+        if quiet and random.random() < dt / 3600:  # about once an hour, the rain speaks
+            self.trigger_wake(t)
+            return
         mult = self.cfg["speed"]
         target = max(8, int(self.h * self.cfg["density"] * 1.8))
         while len(self.streams) < target and random.random() < 0.4:
             self.streams.append(Noise(self.h, self.w, eraser=random.random() < 0.22))
         for s in self.streams:
             s.update(dt, mult)
-        self.streams = [s for s in self.streams if not s.dead(self.w)]
         for m in self.messages:
             m.update(t, dt, mult)
-        self.messages = [m for m in self.messages if not m.done]
         if t >= self.next_msg:
             self.spawn_message(t)
             self.next_msg = t + self.cfg["message_every_seconds"] * random.uniform(0.7, 1.4)
 
     def draw(self, t):
         term, pal = self.term, self.pal
+        if self.wake:
+            w = self.wake
+            line = WAKE[w["line"]][: int(w["chars"])]
+            term.span(2, 3, pal["scramble"], line + "█")
+            term.flush()
+            return
         self._spans = {}
         for m in self.messages:
             self._spans.setdefault(m.row, []).append(m.span_range())
         if self.reader_pending:
-            self.mount_reader()
-        if self.reader:
-            rect = self.reader_rect()
-        elif self.show_help or self.editor or self.picker:
+            self.mount_summary(t)
+        if self.show_help or self.editor or self.picker:
             rect = self.compute_panel_rect()
         else:
             rect = None
@@ -845,8 +938,10 @@ class App:
                     term.cell(y, x, esc, ch)
             for s in self.streams:
                 s.draw(term, t, pal, self.glyphs, self.guard)
+            self.streams = [s for s in self.streams if not s.dead(self.w)]
             for m in self.messages:
                 m.draw(term, t, pal, self.glyphs)
+            self.messages = [m for m in self.messages if not m.done]
         if self.show_status:
             with self.feed.lock:
                 status, at = self.feed.status, self.feed.fetched_at
@@ -860,17 +955,19 @@ class App:
             term.span(self.h - 1, max(0, self.w - len(msg) - 3), pal["dim"], f" {msg} ")
         if self.show_help or self.editor or self.picker:
             self.draw_panel()
-        if self.reader:
-            self.draw_reader()
         term.flush()
 
-    # -- the reader: read an article without leaving the rain ---------------
-    def open_article(self, link, t):
-        self.flash(f"decoding {link['domain'] or 'article'}…", t)
+    # -- summaries: click a headline and its story decodes into the rain ----
+    def open_summary(self, link, t):
+        self.flash(f"decoding {link['domain'] or 'story'}…", t)
+        self.reader_req += 1
+        tok = self.reader_req
 
         def fetch():
             try:
-                body = {"ids": [link["url"]], "text": True, "livecrawl": "fallback"}
+                body = {"ids": [link["url"]],
+                        "summary": {"query": "What happened, concretely? 2-4 short sentences."},
+                        "livecrawl": "fallback"}
                 req = urllib.request.Request(
                     "https://api.exa.ai/contents",
                     data=json.dumps(body).encode(),
@@ -880,70 +977,63 @@ class App:
                 with urllib.request.urlopen(req, timeout=25) as resp:
                     results = json.loads(resp.read()).get("results", [])
                 r = results[0] if results else {}
-                self.reader_pending = {
+                text = (r.get("summary") or "").strip() or "(no summary could be decoded)"
+                self.reader_pending = (tok, {
                     "title": clean_title(r.get("title")) or link["text"],
-                    "domain": link["domain"],
-                    "text": (r.get("text") or "").strip() or "(no text could be extracted)",
-                }
+                    "domain": link["domain"], "summary": text, "url": link["url"],
+                })
             except Exception:
-                self.reader_pending = {"title": link["text"], "domain": link["domain"],
-                                       "text": "(could not fetch the article — "
-                                               "the headline is still a clickable link)"}
+                self.reader_pending = (tok, {
+                    "title": link["text"], "domain": link["domain"], "url": link["url"],
+                    "summary": "(the summary could not be decoded — "
+                               "shift-click the headline to open the story)",
+                })
 
         threading.Thread(target=fetch, daemon=True).start()
 
-    def mount_reader(self):
-        art, self.reader_pending = self.reader_pending, None
-        width = min(self.w - 12, 84)
-        lines = []
-        for para in art["text"].split("\n"):
-            para = para.strip()
-            if not para:
-                continue
-            lines.extend(textwrap.wrap(para, width=width - 6) or [""])
-            lines.append("")
-        self.reader = {"title": art["title"], "domain": art["domain"],
-                       "lines": lines, "top": 0, "width": width}
-        self.picker = False
-        self.panel_rect = None
-        self.term.out("\x1b[2J")
+    def mount_summary(self, t):
+        (tok, art), self.reader_pending = self.reader_pending, None
+        if tok != self.reader_req:
+            return
+        width = max(30, min(self.w - 16, 72))
+        lines = textwrap.wrap(art["summary"], width=width)[:6]
+        block = [(art["title"][:width], "news")] + [(s, "summary") for s in lines]
+        k = len(block)
+        taken = {m.row for m in self.messages}
+        r0 = None
+        for _ in range(30):
+            cand = random.randint(1, max(1, self.h - 2 - k))
+            if all((cand + i) not in taken for i in range(k)):
+                r0 = cand
+                break
+        if r0 is None:
+            r0 = 1
+            self.messages = [m for m in self.messages if not (r0 <= m.row < r0 + k)]
+        x0 = max(2, (self.w - width) // 2 + random.randint(-6, 6))
+        for i, (text, kind) in enumerate(block):
+            m = Message(text, kind, art["url"] if kind == "news" else None,
+                        r0 + i, self.w, t, x0=x0, delay=0.35 * i)
+            m.domain = art.get("domain", "")
+            m.dwell = 10.0 + 0.03 * len(art["summary"])
+            self.messages.append(m)
 
-    def reader_rect(self):
-        width = self.reader["width"]
-        x0 = max(0, (self.w - width) // 2)
-        return (1, x0, self.h - 2, min(self.w - 2, x0 + width - 1))
-
-    def draw_reader(self):
-        y0, x0, y1, x1 = self.panel_rect
-        bw = x1 - x0 + 1
-        rd = self.reader
-        for y in range(y0, y1 + 1):
-            self.term.span(y, x0, self.pal["blank"], " " * bw)
-        title = f" {rd['title']} "[: bw - 4]
-        src = f" {rd['domain']} " if rd["domain"] else ""
-        self.term.span(y0 + 1, x0 + 2, self.pal["news"], title)
-        if src:
-            self.term.span(y0 + 2, x0 + 2, self.pal["dim"], src[: bw - 4])
-        body_top = y0 + 4
-        body_h = y1 - body_top - 1
-        visible = rd["lines"][rd["top"]: rd["top"] + body_h]
-        for i, line in enumerate(visible):
-            self.term.span(body_top + i, x0 + 3, self.pal["reader"], line[: bw - 6])
-        more = len(rd["lines"]) - rd["top"] - body_h
-        foot = f" j/k scroll{f' · {more} lines below' if more > 0 else ''} · q closes "
-        self.term.span(y1, x0 + 2, self.pal["dim"], foot[: bw - 4])
+    def click(self, x, y, t):
+        for m in self.messages:
+            if m.row == y and m.url and m.x0 <= x < m.x0 + len(m.text):
+                self.open_summary({"text": m.text, "url": m.url, "domain": m.domain}, t)
+                return
 
     def panel_lines(self):
         if self.show_help:
             return HELP
         if self.picker:
-            lines = [" ▚ read — pick a headline ", ""]
+            sel = self.picker["sel"]
+            lines = [" ▚ decode a story ", ""]
             for i, l in enumerate(self.shown_links, 1):
-                mark = f"{l['domain']}" if l["domain"] else ""
-                lines.append(f"   {i}  {l['text'][:70]}")
-                if mark:
-                    lines.append(f"      {mark}")
-            lines += ["", "   1-9 opens the article here · esc closes"]
+                mark = "▸" if i - 1 == sel else " "
+                lines.append(f" {mark} {i}  {l['text'][:70]}")
+            lines += ["", "   ↑/↓ + enter · or just click a headline in the rain",
+                      "   its story decodes into the stream · esc closes"]
             return lines
         ed = self.editor
         kind = ed["kind"]
@@ -988,8 +1078,7 @@ class App:
     def close_panel(self):
         self.editor = None
         self.show_help = False
-        self.picker = False
-        self.reader = None
+        self.picker = None
         self.panel_rect = None
         self.term.out("\x1b[2J")  # let the field rebuild — a small reboot
 
@@ -1000,32 +1089,65 @@ class App:
         self.term.span(row, 0, self.pal["blank"], " " * (self.w - 1))
 
     # -- input -------------------------------------------------------------
+    @staticmethod
+    def _tokens(data):
+        """Split raw input into ("key", byte) / ("seq", final) / ("mouse", ...)
+        tokens so escape sequences never leak bytes into the key handlers."""
+        toks, i, n = [], 0, len(data)
+        while i < n:
+            b = data[i]
+            if b == 27 and i + 1 < n and data[i + 1] in (0x5B, 0x4F):
+                j = i + 2
+                while j < n and not (0x40 <= data[j] <= 0x7E):
+                    j += 1
+                final = data[j] if j < n else 0
+                params = bytes(data[i + 2:j])
+                if final in (0x4D, 0x6D) and params.startswith(b"<"):
+                    try:
+                        btn, mx, my = (int(v) for v in params[1:].split(b";"))
+                        toks.append(("mouse", (btn, mx, my, final == 0x4D)))
+                    except ValueError:
+                        pass
+                else:
+                    toks.append(("seq", final))
+                i = j + 1
+            else:
+                toks.append(("key", b))
+                i += 1
+        return toks
+
     def handle_bytes(self, data, t):
-        for b in data:
-            if self.reader is not None:
-                rd = self.reader
-                page = max(1, (self.panel_rect[2] - self.panel_rect[0]) - 5)
-                if b in (ord("q"), 27):
-                    self.close_panel()
-                    return True
-                elif b in (ord("j"), ord("\x0e")):
-                    rd["top"] = min(max(0, len(rd["lines"]) - page), rd["top"] + 1)
-                elif b == ord("k"):
-                    rd["top"] = max(0, rd["top"] - 1)
-                elif b in (ord(" "), ord("d")):
-                    rd["top"] = min(max(0, len(rd["lines"]) - page), rd["top"] + page)
-                elif b == ord("u"):
-                    rd["top"] = max(0, rd["top"] - page)
+        for kind, val in self._tokens(data):
+            is_seq = kind == "seq"
+            b = val if kind == "key" else 0
+            if kind == "mouse":
+                btn, mx, my, press = val
+                if press and btn == 0 and not (self.wake or self.editor or self.show_help):
+                    self.click(mx - 1, my - 1, t)
                 continue
+            if self.wake:
+                if b in (ord("q"), 27):
+                    return False
+                continue  # the rain is speaking; let it finish
             if self.picker:
-                if 0x31 <= b <= 0x39 and int(chr(b)) <= len(self.shown_links):
-                    self.open_article(self.shown_links[int(chr(b)) - 1], t)
-                    self.picker = False
-                    self.panel_rect = None
-                    self.term.out("\x1b[2J")
+                links = self.shown_links
+                if is_seq:
+                    if links and val == 0x41:      # up
+                        self.picker["sel"] = (self.picker["sel"] - 1) % len(links)
+                    elif links and val == 0x42:    # down
+                        self.picker["sel"] = (self.picker["sel"] + 1) % len(links)
+                    continue
+                if b in (13, 10) and links:
+                    self.open_summary(links[self.picker["sel"]], t)
+                    self.close_panel()
+                elif 0x31 <= b <= 0x39 and int(chr(b)) <= len(links):
+                    self.open_summary(links[int(chr(b)) - 1], t)
+                    self.close_panel()
                 else:
                     self.close_panel()
                 continue
+            if is_seq:
+                continue  # arrows etc. only mean something in the picker
             if self.editor is not None:
                 ed = self.editor
                 entries = self.cfg[ed["kind"]]
@@ -1034,11 +1156,17 @@ class App:
                     if not val:
                         self.close_panel()
                         continue
+                    if val.casefold() in ("neo", "wake up", "follow the white rabbit"):
+                        self.close_panel()
+                        self.trigger_wake(t)
+                        continue
                     if val.casefold() not in (str(x).casefold() for x in entries):
                         entries.append(val)
                         save_config(self.cfg)
                         self.feed.wake.set()
-                        self.flash(f"added {val} — refreshing…", t)
+                        cap = 4 if ed["kind"] == "topics" else 3
+                        note = f" (only the first {cap} are fetched)" if len(entries) > cap else ""
+                        self.flash(f"added {val} — refreshing…{note}", t)
                     ed["input"], ed["pending"] = "", b""
                 elif b == 27:
                     self.close_panel()
@@ -1086,7 +1214,7 @@ class App:
                 self.editor = {"kind": "places", "input": "", "pending": b""}
             elif b in (13, 10, ord("l")):
                 if self.shown_links:
-                    self.picker = True
+                    self.picker = {"sel": 0}
                 else:
                     self.flash("no headlines on screen yet", t)
             elif b == ord("m"):
@@ -1115,7 +1243,7 @@ class App:
     # -- main loop ---------------------------------------------------------
     def run(self):
         signal.signal(signal.SIGWINCH, lambda *_: setattr(self, "resized", True))
-        self.term.enter()
+        self.term.enter(mouse=bool(self.cfg.get("mouse", True)))
         try:
             last = time.monotonic()
             frame = 0
@@ -1151,6 +1279,7 @@ def main():
     ap.add_argument("--topics", help="comma-separated topics, overrides config")
     ap.add_argument("--places", help="comma-separated places for local intel, overrides config")
     ap.add_argument("--speed", type=float, help="speed multiplier")
+    ap.add_argument("--theme", choices=["auto", "matrix"], help="palette source")
     ap.add_argument("--version", action="version", version=f"meanwhile {VERSION}")
     args = ap.parse_args()
 
@@ -1164,6 +1293,8 @@ def main():
         cfg["places"] = [s.strip() for s in args.places.split(",") if s.strip()]
     if args.speed:
         cfg["speed"] = args.speed
+    if args.theme:
+        cfg["theme"] = args.theme
     if args.ascii:
         cfg["ascii_only"] = True
 

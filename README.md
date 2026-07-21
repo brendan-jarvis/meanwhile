@@ -7,28 +7,24 @@ if you look — are real things: live news headlines, local intel for places
 you care about, and true, quietly poetic facts about what is happening
 somewhere on Earth at this exact moment.
 
-```
- :ﾌ ｿ+ﾛ 1 ｱ8     2ﾏ ｺﾋｼｯｽ ｼｩｵﾌﾔﾑﾃ the sun is climbing over Auckland about now  7ﾋﾝﾑﾝｸｾ ﾘ*ｷ >ﾊｪ
-9 :ｭｷｰｫﾑﾅｭｸｴ   ﾁｾｭ ﾍ･+ﾒ:ｹﾕﾔﾚﾘｬﾌﾃｪｽｱｲ< ｭｯｺｺ ﾉ ｯｧｴﾃ 3 ﾏﾈ7 ･ ﾒｸﾈ  5ｫｽ ﾖ2+ﾊｬｪﾜｻ  ｿ3ﾜ ･ ｲ ﾁﾕﾝｫｭ6ｮ
-ﾍﾗｯ9ｰ Trump 'Planning for Wider War' in Iran — With Possible Ground Invasion — as US Bombing…
- ﾋｦ ｽﾏﾏ6 ｷﾄﾙ3ﾐｴｦ41 ﾗｼ ﾅﾒｱﾙﾄﾁﾇﾒ6ﾚﾕｽ4    ﾇ ｹﾐ  8 ｫｯ ﾀﾘﾘ ﾒ+ｴﾓｴ>ﾃ   ﾛ            ｫｭｸ  ｨﾓﾖｶ ｮ5<ﾏ
->ﾁｮﾘｩ<ﾚ ﾁｾﾔ30ｴｦ As it happened: Burnham puts his stamp on Cabinet += ｳﾜ ﾘ3ﾇﾈ  ｼ ﾏ4ｧ ﾘﾓ>ｩﾏﾔﾍ
-ﾆﾒ95ﾙｯｽ ｶｸ ﾖ6ﾋ ｨﾗ lightning has <ﾐﾙﾀﾍﾛ2ﾈ:<ｹｶ1ﾘ24ｱｮﾚｺｰﾔﾑ0ﾊﾕｫｱﾖｭ=ﾙ +ﾝ1ﾌ ﾔ *ﾓﾃｩ  *<ﾑ<ﾌﾐｻﾕｹ5ﾆｫ
-```
+![meanwhile](shots/hero.png)
 
 In *The Matrix*, the operators stopped seeing code and started seeing the
 world through it. That's the idea: an ambient screen you can actually read.
 Glance at it and it's rain; look at it and it's the world.
 
 - **News** — live headlines, narrowed by your topics, decoded into the
-  stream. Every headline is a real hyperlink (OSC 8): click it to open the
-  story, or press `enter` and read the article *inside the rain*.
+  stream. **Click a headline and its story decodes into the rain** as a
+  short summary; shift-click opens the article in your browser (headlines
+  are real OSC 8 hyperlinks).
 - **Local intel** — tune to any towns or regions and read what is
   happening there, down to village-notice level.
-- **Poetic** — true things happening right now, for scale and gratitude:
-  how many people were born since you opened the window, tonight's actual
-  moon phase, where the sun is rising at this moment, what Voyager 1 has
-  done while you watched.
+- **Poetic** — true things happening right now, for scale and gratitude,
+  drawn from a growing set of veins: the sky, the sea, deep time, the body,
+  creatures, other people. Live counters (people born since you opened the
+  window, what Voyager 1 did while you watched), tonight's actual moon phase,
+  where the sun is rising at this second, what the season is doing at the
+  poles. Every line is true, and more are finding their way in.
 
 Zero dependencies. One Python file. Runs anywhere Python 3.11+ and a
 terminal exist.
@@ -42,6 +38,9 @@ ln -sf "$PWD/meanwhile.py" ~/.local/bin/meanwhile
 meanwhile
 ```
 
+On Arch, an AUR package (`meanwhile`) is on its way — the PKGBUILD lives
+in [packaging/aur](packaging/aur).
+
 News comes from the [Exa](https://exa.ai) search API (`fast` type — their
 cheapest tier, a few requests per refresh). Put `EXA_API_KEY` in your
 environment (or point `env_files` in the config at a `.env` that has it).
@@ -51,21 +50,26 @@ environment (or point `env_files` in the config at a `.env` that has it).
 
 | key | action | key | action |
 |-----|--------|-----|--------|
-| `enter` | **read an article in the rain** | `q` | quit |
+| `click` | **decode a story into the rain** | `q` | quit |
+| `enter` | pick a story to decode (↑/↓ + enter) | `space` | pause |
 | `t` | edit topics | `g` | edit places (local intel) |
-| `f` | focus — surface the text | `space` | pause |
-| `n` | a headline now | `o` | something true now |
+| `f` | focus — surface the text | `n` / `o` | a headline / something true |
 | `m` / `p` | toggle news / poetic | `r` | refresh headlines |
 | `+` / `-` | speed | `s` / `?` | status / help |
 
 Editors: type + enter adds, `1`–`9` removes, esc closes. Changes persist
-and refetch immediately. In the reader: `j`/`k`/`space` scroll, `q` closes.
+and refetch immediately.
 
 ## Reading modes
 
 By default text sits **embedded** — a shade above the field, part of the
 code. Press `f` for **focus** and headlines surface in full contrast when
 you actually want to read the world. The preference sticks.
+
+Click any headline (or press `enter` to pick one) and its story decodes
+into the stream as a short summary — you never leave the rain:
+
+![summary](shots/summary.png)
 
 ## Theming — including Omarchy, out of the box
 
@@ -74,9 +78,11 @@ automatically: it reads the current theme's colors and rains in *your*
 palette — and when you switch themes, the rain follows within seconds,
 live. No configuration.
 
+![omarchy theming](shots/omarchy-theme.png)
+
 Elsewhere it defaults to classic matrix green (256-color), with a plain
-ANSI fallback. Set `"theme": "matrix"` in the config to force green
-anywhere.
+ANSI fallback. Set `"theme": "matrix"` in the config (or pass
+`--theme matrix`) to force green anywhere.
 
 ## Config
 
@@ -96,10 +102,13 @@ Headlines are cached in `~/.cache/meanwhile/` so launch is instant.
 
 ## Notes
 
-- Clickable links need a terminal with OSC 8 support (kitty, Alacritty,
-  ghostty, foot, WezTerm and most modern terminals; inside tmux you need a
-  recent tmux). The built-in reader works everywhere.
+- Plain click decodes a summary in-app; shift-click follows the OSC 8
+  hyperlink (kitty, Alacritty, ghostty, foot, WezTerm and most modern
+  terminals; inside tmux you need a recent tmux). Set `"mouse": false`
+  in the config to leave the mouse alone entirely.
 - CPU ~1–2% of one core; it's just characters.
+- Every so often — not often — the rain has something to say to you
+  directly. If you're impatient, you know whose name to type.
 
 ## License
 
