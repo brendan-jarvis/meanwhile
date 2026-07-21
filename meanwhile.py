@@ -1,37 +1,45 @@
 #!/usr/bin/env python3
 """meanwhile — horizontal matrix rain of things happening right now.
 
-Noise streams sweep across the terminal like cmatrix turned on its side.
-Out of the noise, real things decode into view: live news headlines
-(via the Exa API) in white, and true, quietly poetic facts about what is
-happening somewhere on Earth right now in amber.
+A full wall of code sweeps across the terminal like cmatrix turned on its
+side. Out of the noise, real things decode into view: live news headlines
+(via the Exa API) in white — clickable in terminals that support hyperlinks —
+local intel for a place you tune to in cyan, and true, quietly poetic facts
+about what is happening somewhere on Earth right now in amber.
 
 stdlib only. Run: meanwhile
 """
 
 import argparse
-import curses
 import json
-import locale
+import math
 import os
 import random
+import select
+import shutil
+import signal
+import sys
+import termios
 import threading
 import time
+import tty
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 CONFIG_PATH = Path.home() / ".config" / "meanwhile" / "config.json"
+CACHE_PATH = Path.home() / ".cache" / "meanwhile" / "headlines.json"
 
 DEFAULT_CONFIG = {
     "topics": ["world news", "artificial intelligence", "uk"],
+    "places": [],
     "refresh_minutes": 15,
     "hours_back": 36,
-    "poetic_ratio": 0.45,
-    "message_every_seconds": 3.0,
-    "density": 0.45,
+    "poetic_ratio": 0.4,
+    "message_every_seconds": 1.8,
+    "density": 0.75,
     "speed": 1.0,
     "ascii_only": False,
     "env_files": ["~/dev/tom-os/.env", "~/dev/exa-newsdesk/.env"],
@@ -65,7 +73,6 @@ POETIC = [
     "right now, someone is laughing so hard they can't breathe",
     "eight billion hearts are beating at this moment, hardly any of them in step",
     "the wheat in your last meal was sown by someone you will never meet",
-    "antarctica is growing a skirt of sea ice the size of itself, as it does every winter",
     "somewhere, a night-shift nurse is checking on a ward of sleeping strangers",
     "satellites are photographing the earth right now; you may be in one of the pictures",
     "the pole star's light arriving tonight left it around the year 1600",
@@ -82,6 +89,27 @@ POETIC = [
     "every wave that has ever reached a shore was already old when it arrived",
 ]
 
+# lines that are only true in part of the year, keyed by month group
+SEASONAL = {
+    (12, 1, 2): [
+        "it is high summer in antarctica; the sun circles the sky without setting",
+        "in the far north the sun barely clears the horizon, and the snow holds the light all day",
+    ],
+    (3, 4, 5): [
+        "the cherry-blossom front is moving north through japan about now",
+        "across the north, billions of birds are flying home for the spring",
+    ],
+    (6, 7, 8): [
+        "above the arctic circle, the sun has not set for weeks",
+        "it is midwinter in patagonia; snow is settling on the andes",
+        "humpback whales are gathering in the warm seas off madagascar to breed",
+    ],
+    (9, 10, 11): [
+        "monarch butterflies are streaming south across america toward mexico",
+        "across the north, the forests are turning gold a little further south each day",
+    ],
+}
+
 # (city, rough UTC offset in July) — for "the sun is rising over ..." lines
 CITIES = [
     ("Apia", 13), ("Auckland", 12), ("Sydney", 10), ("Tokyo", 9),
@@ -96,14 +124,35 @@ CITIES = [
 
 def load_config():
     cfg = dict(DEFAULT_CONFIG)
+    user = {}
     try:
-        cfg.update(json.loads(CONFIG_PATH.read_text()))
+        user = json.loads(CONFIG_PATH.read_text())
     except FileNotFoundError:
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.write_text(json.dumps(DEFAULT_CONFIG, indent=2) + "\n")
-    except (json.JSONDecodeError, OSError):
         pass
+    except (json.JSONDecodeError, OSError):
+        return cfg
+    # migrate v0.1 auto-written defaults to the denser v0.2 feel
+    if user.get("density") == 0.45:
+        user.pop("density")
+    if user.get("message_every_seconds") == 3.0:
+        user.pop("message_every_seconds")
+    if "env_file" in user:
+        user.setdefault("env_files", [user.pop("env_file")])
+    if "place" in user:
+        old = (user.pop("place") or "").strip()
+        if old:
+            user.setdefault("places", [old])
+    cfg.update(user)
+    save_config(cfg)
     return cfg
+
+
+def save_config(cfg):
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.write_text(json.dumps(cfg, indent=2) + "\n")
+    except OSError:
+        pass
 
 
 def resolve_api_key(cfg):
@@ -122,10 +171,34 @@ def resolve_api_key(cfg):
     return None
 
 
+def moon_line():
+    ref = datetime(2000, 1, 6, 18, 14, tzinfo=timezone.utc)  # a known new moon
+    days = (datetime.now(timezone.utc) - ref).total_seconds() / 86400
+    phase = (days % 29.530588) / 29.530588
+    illum = (1 - math.cos(2 * math.pi * phase)) / 2
+    if phase < 0.03 or phase > 0.97:
+        name = "new — all shadow"
+    elif phase < 0.22:
+        name = "a waxing crescent"
+    elif phase < 0.28:
+        name = "at first quarter"
+    elif phase < 0.47:
+        name = "waxing gibbous"
+    elif phase < 0.53:
+        name = "full"
+    elif phase < 0.72:
+        name = "waning gibbous"
+    elif phase < 0.78:
+        name = "at last quarter"
+    else:
+        name = "a waning crescent"
+    return f"tonight the moon is {name}, {int(illum * 100)}% lit"
+
+
 def poetic_line(started_at):
-    """One true thing. Mix of a static corpus, live counters, and city clocks."""
+    """One true thing. Static corpus, live counters, city clocks, sky state."""
     elapsed = time.time() - started_at
-    computed = []
+    computed = [moon_line()]
     if elapsed > 15:
         computed += [
             f"about {int(elapsed * 4.3):,} people have been born since you opened this window",
@@ -133,7 +206,13 @@ def poetic_line(started_at):
             f"voyager 1 is {int(elapsed * 17):,} km farther from home than when this screen lit up",
             f"the sun has carried you {int(elapsed * 29.8):,} km through space since you began watching",
             f"the earth has turned {elapsed * 360 / 86164:.2f} degrees since this began",
+            f"your heart has beaten about {int(elapsed * 1.15):,} times while you watched",
         ]
+    month = datetime.now(timezone.utc).month
+    for months, lines in SEASONAL.items():
+        if month in months:
+            computed.append(random.choice(lines))
+            break
     utc_h = datetime.now(timezone.utc).hour + datetime.now(timezone.utc).minute / 60
     for city, off in random.sample(CITIES, len(CITIES)):
         local = (utc_h + off) % 24
@@ -146,9 +225,25 @@ def poetic_line(started_at):
         if 0 <= local < 4:
             computed.append(f"it is deep night in {city}, and the city is mostly dreaming")
             break
-    if computed and random.random() < 0.45:
+    if random.random() < 0.5:
         return random.choice(computed)
     return random.choice(POETIC)
+
+
+def clean_title(raw):
+    """Collapse whitespace and strip trailing publication names ('… | The Verge')."""
+    t = " ".join((raw or "").split())
+    changed = True
+    while changed:
+        changed = False
+        for sep in (" | ", " — ", " – ", " - "):
+            if sep not in t:
+                continue
+            base, suffix = t.rsplit(sep, 1)
+            if base and len(suffix.split()) <= 4 and not any(c.isdigit() for c in suffix):
+                t, changed = base, True
+                break
+    return t
 
 
 class Newsfeed(threading.Thread):
@@ -160,9 +255,28 @@ class Newsfeed(threading.Thread):
         self.api_key = api_key
         self.lock = threading.Lock()
         self.wake = threading.Event()
-        self.headlines = []
+        self.items = []       # [{"text", "url", "kind": "news"|"local"}]
+        self.generation = 0   # bumped on every successful fetch
         self.status = "connecting" if api_key else "no api key — poetic only"
         self.fetched_at = None
+        try:
+            cached = json.loads(CACHE_PATH.read_text())
+            if time.time() - cached.get("at", 0) < 86400 and cached.get("items"):
+                same_places = self._places_key(cached.get("places", [])) == self._places_key(
+                    cfg.get("places", [])
+                )
+                items = [i for i in cached["items"]
+                         if i.get("kind") != "local" or same_places]
+                if items:
+                    self.items = items
+                    self.generation = 1
+                    self.status = f"{len(items)} cached headlines"
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
+
+    @staticmethod
+    def _places_key(places):
+        return sorted(str(p).strip().casefold() for p in places if str(p).strip())
 
     def run(self):
         while True:
@@ -171,15 +285,16 @@ class Newsfeed(threading.Thread):
             self.wake.wait(max(2, self.cfg["refresh_minutes"]) * 60)
             self.wake.clear()
 
-    def _search(self, topic, search_type):
+    def _search(self, query, num, category=None, search_type="fast"):
         since = datetime.now(timezone.utc) - timedelta(hours=self.cfg["hours_back"])
         body = {
-            "query": f"{topic} — the most significant news right now",
+            "query": query,
             "type": search_type,
-            "category": "news",
-            "numResults": max(4, 24 // max(1, len(self.cfg["topics"]))),
+            "numResults": num,
             "startPublishedDate": since.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
         }
+        if category:
+            body["category"] = category
         req = urllib.request.Request(
             "https://api.exa.ai/search",
             data=json.dumps(body).encode(),
@@ -188,77 +303,252 @@ class Newsfeed(threading.Thread):
         with urllib.request.urlopen(req, timeout=20) as resp:
             return json.loads(resp.read()).get("results", [])
 
+    def _collect(self, results, kind, seen):
+        out = []
+        for r in results:
+            title = clean_title(r.get("title"))
+            url = r.get("url") or ""
+            domain = ""
+            if "://" in url:
+                domain = url.split("://", 1)[1].split("/", 1)[0].removeprefix("www.")
+            # strip a trailing pub name that clean_title kept (e.g. "- France 24",
+            # whose digits defeat the generic rule) when it matches the domain root
+            root = domain.split(".")[0].replace("-", "").lower() if domain else ""
+            if len(root) >= 4:
+                for sep in (" | ", " — ", " – ", " - "):
+                    if sep in title:
+                        base, suffix = title.rsplit(sep, 1)
+                        norm = suffix.replace(" ", "").replace("-", "").lower()
+                        if base and norm and (root in norm or norm in root):
+                            title = base
+                            break
+            if not title or title.casefold() in seen:
+                continue
+            seen.add(title.casefold())
+            text = f"{title}  ·  {domain}" if domain else title
+            out.append({"text": text, "url": url, "kind": kind})
+        return out
+
     def fetch(self):
         items, seen = [], set()
-        for topic in self.cfg["topics"][:4]:
+        places = [p.strip() for p in self.cfg.get("places", []) if str(p).strip()][:3]
+        for place in places:
             try:
-                results = self._search(topic, "fast")
+                results = self._search(
+                    f"{place} — local news, events and what is happening there now", 10
+                )
+                items += self._collect(results, "local", seen)
+            except Exception:
+                pass
+        # 25 results per request is the top of Exa's cheapest billing tier
+        for topic in self.cfg["topics"][:4]:
+            query = f"{topic} — the most significant news right now"
+            try:
+                results = self._search(query, 25, category="news")
             except urllib.error.HTTPError:
                 try:
-                    results = self._search(topic, "auto")
+                    results = self._search(query, 25, category="news", search_type="auto")
                 except Exception:
                     continue
             except Exception:
                 continue
-            for r in results:
-                title = " ".join((r.get("title") or "").split())
-                if not title or title.casefold() in seen:
-                    continue
-                seen.add(title.casefold())
-                domain = ""
-                url = r.get("url") or ""
-                if "://" in url:
-                    domain = url.split("://", 1)[1].split("/", 1)[0].removeprefix("www.")
-                items.append(f"{title}  ·  {domain}" if domain else title)
+            items += self._collect(results, "news", seen)
         with self.lock:
             if items:
-                random.shuffle(items)
-                self.headlines = items
+                self.items = items
+                self.generation += 1
                 self.fetched_at = time.localtime()
-                self.status = f"{len(items)} headlines"
-            elif not self.headlines:
+                n_local = sum(1 for i in items if i["kind"] == "local")
+                self.status = f"{len(items)} headlines" + (
+                    f" · {n_local} local ({', '.join(places)})" if places else ""
+                )
+                try:
+                    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+                    CACHE_PATH.write_text(
+                        json.dumps({"at": time.time(), "places": places, "items": items})
+                    )
+                except OSError:
+                    pass
+            elif not self.items:
                 self.status = "news offline — poetic only"
 
 
-class Noise:
-    """A shimmering stream of glyphs sweeping left to right."""
+# ---------------------------------------------------------------------------
+# rendering: raw ANSI so headlines can be real OSC 8 hyperlinks
 
-    def __init__(self, row, width):
-        self.row = row
-        self.head = -random.uniform(0, 10)
-        self.speed = random.uniform(15, 45)
-        self.length = random.randint(6, max(8, min(30, width // 3)))
+
+def sgr(*codes):
+    return "\x1b[" + ";".join(map(str, codes)) + "m"
+
+
+def build_palette(basic=False):
+    if not basic:
+        return {
+            "head": sgr(0, 1, 38, 5, 48),
+            "trail": [sgr(0, 38, 5, 46), sgr(0, 38, 5, 40), sgr(0, 38, 5, 34),
+                      sgr(0, 38, 5, 28), sgr(0, 38, 5, 22), sgr(0, 2, 38, 5, 22)],
+            "residue": [sgr(0, 38, 5, 22), sgr(0, 2, 38, 5, 28),
+                        sgr(0, 2, 38, 5, 22), sgr(0, 2, 38, 5, 235)],
+            "news": sgr(0, 1, 38, 5, 255),
+            "local": sgr(0, 1, 38, 5, 87),
+            "poetic": sgr(0, 3, 38, 5, 222),
+            "scramble": sgr(0, 1, 38, 5, 231),
+            "dim": sgr(0, 38, 5, 241),
+            "blank": sgr(0),
+        }
+    g, gd = sgr(0, 32), sgr(0, 2, 32)
+    return {
+        "head": sgr(0, 1, 32),
+        "trail": [sgr(0, 1, 32), g, g, gd, gd, gd],
+        "residue": [gd],
+        "news": sgr(0, 1, 37),
+        "local": sgr(0, 1, 36),
+        "poetic": sgr(0, 33),
+        "scramble": sgr(0, 1, 37),
+        "dim": sgr(0, 2, 37),
+        "blank": sgr(0),
+    }
+
+
+class Term:
+    """Minimal raw-terminal layer: alt screen, cbreak keys, buffered writes."""
+
+    def __init__(self):
+        self.fd = sys.stdin.fileno()
+        self.buf = []
+        self.w, self.h = shutil.get_terminal_size()
+        self.saved = None
+
+    def enter(self):
+        self.saved = termios.tcgetattr(self.fd)
+        tty.setcbreak(self.fd)
+        self.out("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[2J")
+        self.flush()
+
+    def leave(self):
+        self.buf.clear()
+        self.out("\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
+        self.flush()
+        if self.saved:
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
+
+    def resize(self):
+        self.w, self.h = shutil.get_terminal_size()
+
+    def out(self, s):
+        self.buf.append(s)
+
+    def cell(self, y, x, esc, ch):
+        if 0 <= y < self.h and 0 <= x < self.w - 1:
+            self.buf.append(f"\x1b[{y + 1};{x + 1}H{esc}{ch}")
+
+    def span(self, y, x, esc, text, url=None):
+        if not (0 <= y < self.h) or x >= self.w - 1:
+            return
+        if x < 0:
+            text, x = text[-x:], 0
+        text = text[: self.w - 1 - x]
+        if not text:
+            return
+        if url:
+            text = f"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\"
+        self.buf.append(f"\x1b[{y + 1};{x + 1}H{esc}{text}")
+
+    def flush(self):
+        if self.buf:
+            sys.stdout.write("".join(self.buf))
+            sys.stdout.flush()
+            self.buf.clear()
+
+    def read(self, timeout):
+        try:
+            r, _, _ = select.select([self.fd], [], [], max(0.0, timeout))
+        except (InterruptedError, OSError):
+            return b""
+        if not r:
+            return b""
+        try:
+            return os.read(self.fd, 256)
+        except OSError:
+            return b""
+
+
+def glyph_at(row, x, salt, glyphs):
+    return glyphs[(x * 73856093 ^ row * 19349663 ^ salt * 83492791) % len(glyphs)]
+
+
+def residue_at(row, x, t, glyphs, pal):
+    """(esc, glyph) for the settled code field at a cell; evolves slowly."""
+    rh = (x * 2654435761 ^ row * 40503 ^ int(t / 7) * 69069) & 0xFFFFFF
+    if rh % 100 < 22:
+        return pal["blank"], " "
+    return pal["residue"][rh % len(pal["residue"])], glyph_at(row, x, (rh >> 8) & 0xFF, glyphs)
+
+
+class Noise:
+    """A stream sweeping left to right. Writers leave settled code behind;
+    erasers carve a moving window of darkness that heals after them."""
+
+    def __init__(self, h, w, eraser=False):
+        self.row = random.randrange(max(1, h))
+        self.eraser = eraser
+        self.head = -random.uniform(0, 12)
+        self.speed = random.uniform(25, 60) if eraser else random.uniform(15, 45)
+        self.length = random.randint(8, max(10, min(34, w // 3)))
+        self.last_head = int(self.head)
+        self.last_tail = int(self.head) - self.length
 
     def update(self, dt, mult):
         self.head += self.speed * mult * dt
 
-    def dead(self, width):
-        return self.head - self.length > width
+    def dead(self, w):
+        return self.head - self.length > w
 
-    def draw(self, put, t, pal, glyphs):
+    def draw(self, term, t, pal, glyphs, guard):
+        hi = int(self.head)
+        tail = hi - self.length + 1
+        if self.eraser:
+            for x in range(self.last_head + 1, hi + 1):
+                if not guard(self.row, x):
+                    term.cell(self.row, x, pal["blank"], " ")
+            for x in range(self.last_tail, tail):
+                if not guard(self.row, x):
+                    esc, ch = residue_at(self.row, x, t, glyphs, pal)
+                    term.cell(self.row, x, esc, ch)
+            self.last_head, self.last_tail = hi, max(self.last_tail, tail)
+            return
+        for x in range(self.last_tail, tail):
+            if not guard(self.row, x):
+                esc, ch = residue_at(self.row, x, t, glyphs, pal)
+                term.cell(self.row, x, esc, ch)
+        self.last_head, self.last_tail = hi, max(self.last_tail, tail)
         for d in range(self.length):
-            x = int(self.head) - d
-            frac = d / self.length
-            k = int(t * 2.5 + (x * 7 + self.row * 13) % 23 / 23)
-            ch = glyphs[(x * 73856093 ^ self.row * 19349663 ^ k * 83492791) % len(glyphs)]
-            band = 0 if d == 0 else min(len(pal["noise"]) - 1, 1 + int(frac * (len(pal["noise"]) - 1)))
-            put(self.row, x, ch, pal["noise"][band])
+            x = hi - d
+            if guard(self.row, x):
+                continue
+            ch = glyph_at(self.row, x, int(t * 2.5 + (x * 7 + self.row * 13) % 23 / 23), glyphs)
+            if d == 0:
+                term.cell(self.row, x, pal["head"], ch)
+            else:
+                band = min(len(pal["trail"]) - 1, int(d / self.length * len(pal["trail"])))
+                term.cell(self.row, x, pal["trail"][band], ch)
 
 
 class Message:
-    """A headline or poetic line that decodes out of the noise, lingers, dissolves."""
+    """A headline or poetic line that decodes out of the field, lingers, dissolves."""
 
-    def __init__(self, text, kind, row, width, t):
-        self.text = text
-        self.kind = kind  # "news" | "poetic"
-        self.row = row
+    def __init__(self, text, kind, url, row, width, t):
+        self.text, self.kind, self.url, self.row = text, kind, url, row
         self.x0 = random.randint(1, max(1, width - len(text) - 2))
-        self.speed = random.uniform(30, 45)
+        self.speed = random.uniform(32, 48)
         self.phase, self.phase_start = "reveal", t
         self.head = 0.0
         self.erase = 0.0
-        self.dwell = 3.5 + 0.05 * len(text)
+        self.dwell = 4.0 + 0.055 * len(text)
         self.done = False
+
+    def span_range(self):
+        return self.x0 - 1, self.x0 + len(self.text) + 1
 
     def update(self, t, dt, mult):
         if self.phase == "reveal":
@@ -273,97 +563,108 @@ class Message:
             if self.erase >= len(self.text) + SCRAMBLE:
                 self.done = True
 
-    def draw(self, put, t, pal, glyphs):
-        text_attr = pal["news"] if self.kind == "news" else pal["poetic"]
-        for i, ch in enumerate(self.text):
-            x = self.x0 + i
-            if self.phase == "reveal":
-                if i < self.head - SCRAMBLE:
-                    put(self.row, x, ch, text_attr)
-                elif i < self.head:
-                    g = glyphs[(x * 73856093 ^ int(t * 12) * 83492791) % len(glyphs)]
-                    put(self.row, x, g, pal["scramble"])
-            elif self.phase == "dwell":
-                put(self.row, x, ch, text_attr)
-            else:
-                if i < self.erase - SCRAMBLE:
-                    continue
-                elif i < self.erase:
-                    g = glyphs[(x * 73856093 ^ int(t * 12) * 83492791) % len(glyphs)]
-                    put(self.row, x, g, pal["fade"])
-                else:
-                    put(self.row, x, ch, text_attr)
+    def draw(self, term, t, pal, glyphs):
+        attr = {"news": pal["news"], "local": pal["local"]}.get(self.kind, pal["poetic"])
+        n = len(self.text)
+        if self.phase == "reveal":
+            locked = min(n, int(self.head - SCRAMBLE))
+            if locked > 0:
+                term.span(self.row, self.x0 - 1, attr, " " + self.text[:locked], self.url)
+            for i in range(max(0, locked), min(n, int(self.head))):
+                g = glyph_at(self.row, self.x0 + i, int(t * 12), glyphs)
+                term.cell(self.row, self.x0 + i, pal["scramble"], g)
+        elif self.phase == "dwell":
+            term.span(self.row, self.x0 - 1, attr, " " + self.text + " ", self.url)
+        else:
+            gone = min(n, int(self.erase - SCRAMBLE))
+            for x in range(self.x0 - 1, self.x0 + gone):
+                esc, ch = residue_at(self.row, x, t, glyphs, pal)
+                term.cell(self.row, x, esc, ch)
+            for i in range(max(0, gone), min(n, int(self.erase))):
+                g = glyph_at(self.row, self.x0 + i, int(t * 12), glyphs)
+                term.cell(self.row, self.x0 + i, pal["trail"][-1], g)
+            if int(self.erase) < n:
+                start = max(0, int(self.erase))
+                term.span(self.row, self.x0 + start, attr, self.text[start:] + " ", self.url)
 
 
-def build_palette():
-    curses.start_color()
-    curses.use_default_colors()
-    pairs = {}
-
-    def mk(fg):
-        if fg not in pairs:
-            pairs[fg] = len(pairs) + 1
-            curses.init_pair(pairs[fg], fg, -1)
-        return curses.color_pair(pairs[fg])
-
-    italic = getattr(curses, "A_ITALIC", 0)
-    if curses.COLORS >= 256:
-        return {
-            "noise": [mk(48) | curses.A_BOLD, mk(46), mk(40), mk(34), mk(28), mk(22), mk(22) | curses.A_DIM],
-            "news": mk(255) | curses.A_BOLD,
-            "poetic": mk(222) | italic,
-            "scramble": mk(231) | curses.A_BOLD,
-            "fade": mk(22) | curses.A_DIM,
-            "dim": mk(241),
-        }
-    g, w, y = curses.COLOR_GREEN, curses.COLOR_WHITE, curses.COLOR_YELLOW
-    return {
-        "noise": [mk(g) | curses.A_BOLD, mk(g) | curses.A_BOLD, mk(g), mk(g), mk(g) | curses.A_DIM, mk(g) | curses.A_DIM],
-        "news": mk(w) | curses.A_BOLD,
-        "poetic": mk(y) | italic,
-        "scramble": mk(w) | curses.A_BOLD,
-        "fade": mk(g) | curses.A_DIM,
-        "dim": mk(w) | curses.A_DIM,
-    }
+HELP = [
+    " meanwhile — things happening right now ",
+    "",
+    "  q        quit              space   pause",
+    "  n        a headline now    o       something true now",
+    "  t        edit topics       g       edit places (local intel)",
+    "  m        toggle news       p       toggle poetic",
+    "  + / -    speed             r       refresh headlines",
+    "  s        status bar        ?       help",
+    "",
+    "  in editors: type + enter adds · 1-9 removes · esc closes",
+    "",
+    "  any other key closes help",
+]
 
 
 class App:
-    def __init__(self, scr, cfg, feed):
-        self.scr = scr
+    def __init__(self, term, cfg, feed):
+        self.term = term
         self.cfg = cfg
         self.feed = feed
-        self.pal = build_palette()
+        basic = "256" not in os.environ.get("TERM", "") and not os.environ.get("COLORTERM")
+        self.pal = build_palette(basic)
         self.glyphs = GLYPHS_ASCII if cfg["ascii_only"] else GLYPHS_KATA
-        self.h, self.w = scr.getmaxyx()
-        self.noise = {}      # row -> Noise
-        self.messages = []   # list[Message]
-        self.queue = []      # unshown headlines
+        self.h, self.w = term.h, term.w
+        self.streams = []
+        self.messages = []
+        self.news_q, self.local_q = [], []
+        self.gen = 0
+        self.recent = []  # first-25-char keys of recently shown poetic lines
         self.started_at = time.time()
-        self.next_msg = time.monotonic() + 1.5
-        self.recent = []  # first-25-chars keys of recently shown lines
+        self.next_msg = time.monotonic() + 1.0
         self.paused = False
         self.show_status = False
         self.show_help = False
+        self.editor = None  # {"kind": "topics"|"places", "input": str, "pending": bytes}
+        self.panel_rect = None  # (y0, x0, y1, x1) of help/editor overlay
         self.news_on = True
         self.poetic_on = True
         self.toast = ("", 0.0)
+        self.resized = False
+        self._spans = {}
 
-    def put(self, y, x, ch, attr):
-        if 0 <= y < self.h and 0 <= x < self.w - 1:
-            try:
-                self.scr.addstr(y, x, ch, attr)
-            except curses.error:
-                pass
+    # -- guard: cells that field/streams must not overwrite ----------------
+    def guard(self, row, x):
+        if row == self.h - 1 and self.show_status:
+            return True
+        if self.panel_rect:
+            y0, x0, y1, x1 = self.panel_rect
+            if y0 <= row <= y1 and x0 <= x <= x1:
+                return True
+        for lo, hi in self._spans.get(row, ()):
+            if lo <= x <= hi:
+                return True
+        return False
 
     # -- content selection -------------------------------------------------
     def next_headline(self):
-        if not self.queue:
-            with self.feed.lock:
-                self.queue = list(self.feed.headlines)
-            random.shuffle(self.queue)
-        return self.queue.pop() if self.queue else None
+        with self.feed.lock:
+            if self.feed.generation != self.gen:
+                self.gen = self.feed.generation
+                self.local_q = [i for i in self.feed.items if i["kind"] == "local"]
+                self.news_q = [i for i in self.feed.items if i["kind"] == "news"]
+                random.shuffle(self.local_q)
+                random.shuffle(self.news_q)
+            elif not self.local_q and not self.news_q and self.feed.items:
+                self.local_q = [i for i in self.feed.items if i["kind"] == "local"]
+                self.news_q = [i for i in self.feed.items if i["kind"] == "news"]
+                random.shuffle(self.local_q)
+                random.shuffle(self.news_q)
+        if self.local_q and (not self.news_q or random.random() < 0.55):
+            return self.local_q.pop()
+        return self.news_q.pop() if self.news_q else None
 
     def spawn_message(self, t, force=None):
+        if len(self.messages) >= max(4, self.h // 4):
+            return
         kind = force
         if kind is None:
             if not (self.news_on or self.poetic_on):
@@ -372,38 +673,37 @@ class App:
                 kind = "news"
             else:
                 kind = "poetic"
-        text = self.next_headline() if kind == "news" else None
-        if text is None:
+        item = self.next_headline() if kind == "news" else None
+        if item is not None:
+            text, url, kind = item["text"], item.get("url"), item.get("kind", "news")
+        else:
             if kind == "news" and not (self.poetic_on or force):
                 return
             for _ in range(8):
                 text = poetic_line(self.started_at)
                 if text[:25] not in self.recent:
                     break
-            kind = "poetic"
-        self.recent = (self.recent + [text[:25]])[-12:]
+            self.recent = (self.recent + [text[:25]])[-12:]
+            url, kind = None, "poetic"
         if len(text) > self.w - 6:
             text = text[: self.w - 9] + "…"
         taken = {m.row for m in self.messages}
-        candidates = [r for r in range(1, self.h - 1) if r not in taken]
+        candidates = [r for r in range(1, self.h - 2) if r not in taken]
         if not candidates:
             return
         spaced = [r for r in candidates if r - 1 not in taken and r + 1 not in taken]
         row = random.choice(spaced or candidates)
-        self.noise.pop(row, None)
-        self.messages.append(Message(text, kind, row, self.w, t))
+        self.messages.append(Message(text, kind, url, row, self.w, t))
 
     # -- frame -------------------------------------------------------------
     def tick(self, t, dt):
         mult = self.cfg["speed"]
-        target = int(self.h * self.cfg["density"])
-        if len(self.noise) < target:
-            free = [r for r in range(self.h) if r not in self.noise and r not in {m.row for m in self.messages}]
-            if free and random.random() < min(1.0, (target - len(self.noise)) * 0.15):
-                r = random.choice(free)
-                self.noise[r] = Noise(r, self.w)
-        for r in [r for r, n in self.noise.items() if (n.update(dt, mult) or n.dead(self.w))]:
-            del self.noise[r]
+        target = max(8, int(self.h * self.cfg["density"] * 1.8))
+        while len(self.streams) < target and random.random() < 0.4:
+            self.streams.append(Noise(self.h, self.w, eraser=random.random() < 0.22))
+        for s in self.streams:
+            s.update(dt, mult)
+        self.streams = [s for s in self.streams if not s.dead(self.w)]
         for m in self.messages:
             m.update(t, dt, mult)
         self.messages = [m for m in self.messages if not m.done]
@@ -412,99 +712,197 @@ class App:
             self.next_msg = t + self.cfg["message_every_seconds"] * random.uniform(0.7, 1.4)
 
     def draw(self, t):
-        self.scr.erase()
-        for n in self.noise.values():
-            n.draw(self.put, t, self.pal, self.glyphs)
+        term, pal = self.term, self.pal
+        self._spans = {}
         for m in self.messages:
-            m.draw(self.put, t, self.pal, self.glyphs)
+            self._spans.setdefault(m.row, []).append(m.span_range())
+        if self.show_help or self.editor:
+            rect = self.compute_panel_rect()
+            if self.panel_rect and rect != self.panel_rect:
+                self.clear_rect(self.panel_rect)
+            self.panel_rect = rect
+        if not self.paused:
+            for _ in range(max(10, (self.w * self.h) // 140)):
+                y, x = random.randrange(self.h), random.randrange(max(1, self.w - 1))
+                if not self.guard(y, x):
+                    esc, ch = residue_at(y, x, t, self.glyphs, pal)
+                    term.cell(y, x, esc, ch)
+            for s in self.streams:
+                s.draw(term, t, pal, self.glyphs, self.guard)
+            for m in self.messages:
+                m.draw(term, t, pal, self.glyphs)
         if self.show_status:
             with self.feed.lock:
                 status, at = self.feed.status, self.feed.fetched_at
             when = time.strftime(" · refreshed %H:%M", at) if at else ""
-            topics = ", ".join(self.cfg["topics"])
-            line = f" meanwhile · {status}{when} · topics: {topics} · q quit ? help "
-            self.put(self.h - 1, 0, line[: self.w - 2], self.pal["dim"])
+            places = [p for p in self.cfg.get("places", []) if str(p).strip()]
+            line = (f" meanwhile · {status}{when} · topics: {', '.join(self.cfg['topics'])}"
+                    + (f" · ⌖ {', '.join(places)}" if places else "") + " · q quit ? help ")
+            term.span(self.h - 1, 0, pal["dim"], line[: self.w - 1].ljust(self.w - 1))
         msg, until = self.toast
         if msg and t < until:
-            self.put(self.h - 1, max(0, self.w - len(msg) - 2), msg, self.pal["dim"])
-        if self.show_help:
-            self.draw_help()
-        self.scr.refresh()
+            term.span(self.h - 1, max(0, self.w - len(msg) - 3), pal["dim"], f" {msg} ")
+        if self.show_help or self.editor:
+            self.draw_panel()
+        term.flush()
 
-    def draw_help(self):
-        lines = [
-            " meanwhile — things happening right now ",
-            "",
-            "  q       quit            space   pause",
-            "  n       a headline now  o       something true now",
-            "  m       toggle news     p       toggle poetic",
-            "  + / -   speed           r       refresh headlines",
-            "  s       status bar      ?       close help",
-        ]
-        bw = max(len(s) for s in lines) + 4
+    def panel_lines(self):
+        if self.show_help:
+            return HELP
+        ed = self.editor
+        kind = ed["kind"]
+        title = (" ◈ topics — what the news feed follows "
+                 if kind == "topics" else " ⌖ places — local intel ")
+        lines = [title, ""]
+        entries = self.cfg[kind]
+        for i, v in enumerate(entries[:9], 1):
+            lines.append(f"   {i}  {v}")
+        if not entries:
+            lines.append("   (none yet — type one below)")
+        lines += ["", f"   ▸ {ed['input']}█", "",
+                  "   type + enter adds · 1-9 removes",
+                  "   enter on empty line closes · esc closes"]
+        return lines
+
+    def compute_panel_rect(self):
+        lines = self.panel_lines()
+        bw = min(self.w - 2, max(46, max(len(s) for s in lines) + 4))
         bh = len(lines) + 2
         y0, x0 = max(0, (self.h - bh) // 2), max(0, (self.w - bw) // 2)
-        for i in range(bh):
-            self.put(y0 + i, x0, " " * bw, curses.A_NORMAL)
-        for i, s in enumerate(lines):
-            self.put(y0 + 1 + i, x0 + 2, s, self.pal["news"] if i == 0 else self.pal["dim"])
+        return (y0, x0, min(self.h - 1, y0 + bh - 1), min(self.w - 2, x0 + bw - 1))
+
+    def draw_panel(self):
+        y0, x0, y1, x1 = self.panel_rect
+        bw = x1 - x0 + 1
+        for i in range(y1 - y0 + 1):
+            self.term.span(y0 + i, x0, self.pal["blank"], " " * bw)
+        accent = self.pal["news"] if self.show_help else (
+            self.pal["local"] if self.editor["kind"] == "places" else self.pal["poetic"])
+        for i, s in enumerate(self.panel_lines()):
+            attr = accent if i == 0 or s.lstrip().startswith("▸") else self.pal["dim"]
+            self.term.span(y0 + 1 + i, x0 + 2, attr, s[: bw - 3])
+
+    def clear_rect(self, rect):
+        y0, x0, y1, x1 = rect
+        for y in range(y0, y1 + 1):
+            self.term.span(y, x0, self.pal["blank"], " " * (x1 - x0 + 1))
+
+    def close_panel(self):
+        self.editor = None
+        self.show_help = False
+        self.panel_rect = None
+        self.term.out("\x1b[2J")  # let the field rebuild — a small reboot
 
     def flash(self, msg, t):
-        self.toast = (msg, t + 2.0)
+        self.toast = (msg, t + 2.5)
 
-    def handle_key(self, ch, t):
-        if ch in (ord("q"), ord("Q"), 27):
-            return False
-        if self.show_help:
-            self.show_help = False
-            return True
-        if ch == ord(" "):
-            self.paused = not self.paused
-            self.flash("paused" if self.paused else "", t)
-        elif ch == ord("n"):
-            self.spawn_message(t, force="news")
-        elif ch == ord("o"):
-            self.spawn_message(t, force="poetic")
-        elif ch == ord("m"):
-            self.news_on = not self.news_on
-            self.flash(f"news {'on' if self.news_on else 'off'}", t)
-        elif ch == ord("p"):
-            self.poetic_on = not self.poetic_on
-            self.flash(f"poetic {'on' if self.poetic_on else 'off'}", t)
-        elif ch in (ord("+"), ord("=")):
-            self.cfg["speed"] = min(4.0, self.cfg["speed"] * 1.25)
-            self.flash(f"speed {self.cfg['speed']:.2f}x", t)
-        elif ch == ord("-"):
-            self.cfg["speed"] = max(0.2, self.cfg["speed"] / 1.25)
-            self.flash(f"speed {self.cfg['speed']:.2f}x", t)
-        elif ch == ord("r"):
-            self.feed.wake.set()
-            self.flash("refreshing headlines…", t)
-        elif ch == ord("s"):
-            self.show_status = not self.show_status
-        elif ch == ord("?"):
-            self.show_help = True
-        elif ch == curses.KEY_RESIZE:
-            self.h, self.w = self.scr.getmaxyx()
-            self.noise = {r: n for r, n in self.noise.items() if r < self.h}
-            self.messages = [m for m in self.messages if m.row < self.h - 1 and m.x0 + len(m.text) < self.w]
+    def clear_row(self, row):
+        self.term.span(row, 0, self.pal["blank"], " " * (self.w - 1))
+
+    # -- input -------------------------------------------------------------
+    def handle_bytes(self, data, t):
+        for b in data:
+            if self.editor is not None:
+                ed = self.editor
+                entries = self.cfg[ed["kind"]]
+                if b in (13, 10):
+                    val = ed["input"].strip()
+                    if not val:
+                        self.close_panel()
+                        continue
+                    if val.casefold() not in (str(x).casefold() for x in entries):
+                        entries.append(val)
+                        save_config(self.cfg)
+                        self.feed.wake.set()
+                        self.flash(f"added {val} — refreshing…", t)
+                    ed["input"], ed["pending"] = "", b""
+                elif b == 27:
+                    self.close_panel()
+                    return True  # drop any queued escape-sequence bytes
+                elif b in (8, 127):
+                    ed["input"], ed["pending"] = ed["input"][:-1], b""
+                elif 0x31 <= b <= 0x39 and not ed["input"] and int(chr(b)) <= len(entries):
+                    gone = entries.pop(int(chr(b)) - 1)
+                    save_config(self.cfg)
+                    self.feed.wake.set()
+                    self.flash(f"removed {gone} — refreshing…", t)
+                elif b >= 32:
+                    # accumulate UTF-8 so places like Zürich type cleanly
+                    ed["pending"] += bytes([b])
+                    try:
+                        ed["input"] += ed["pending"].decode("utf-8")
+                        ed["pending"] = b""
+                    except UnicodeDecodeError:
+                        if len(ed["pending"]) >= 4:
+                            ed["pending"] = b""
+                continue
+            if self.show_help:
+                if b == ord("q"):
+                    return False
+                self.close_panel()
+                continue
+            if b in (ord("q"), 27):
+                return False
+            if b == ord(" "):
+                self.paused = not self.paused
+                self.flash("paused — space to resume" if self.paused else "", t)
+            elif b == ord("n"):
+                self.spawn_message(t, force="news")
+            elif b == ord("o"):
+                self.spawn_message(t, force="poetic")
+            elif b == ord("t"):
+                self.editor = {"kind": "topics", "input": "", "pending": b""}
+            elif b == ord("g"):
+                self.editor = {"kind": "places", "input": "", "pending": b""}
+            elif b == ord("m"):
+                self.news_on = not self.news_on
+                self.flash(f"news {'on' if self.news_on else 'off'}", t)
+            elif b == ord("p"):
+                self.poetic_on = not self.poetic_on
+                self.flash(f"poetic {'on' if self.poetic_on else 'off'}", t)
+            elif b in (ord("+"), ord("=")):
+                self.cfg["speed"] = min(4.0, self.cfg["speed"] * 1.25)
+                self.flash(f"speed {self.cfg['speed']:.2f}x", t)
+            elif b == ord("-"):
+                self.cfg["speed"] = max(0.2, self.cfg["speed"] / 1.25)
+                self.flash(f"speed {self.cfg['speed']:.2f}x", t)
+            elif b == ord("r"):
+                self.feed.wake.set()
+                self.flash("refreshing headlines…", t)
+            elif b == ord("s"):
+                self.show_status = not self.show_status
+                if not self.show_status:
+                    self.clear_row(self.h - 1)
+            elif b == ord("?"):
+                self.show_help = True
         return True
 
+    # -- main loop ---------------------------------------------------------
     def run(self):
-        curses.curs_set(0)
-        self.scr.nodelay(True)
-        self.scr.keypad(True)
-        last = time.monotonic()
-        while True:
-            t = time.monotonic()
-            dt, last = min(t - last, 0.1), t
-            ch = self.scr.getch()
-            if ch != -1 and not self.handle_key(ch, t):
-                return
-            if not self.paused:
-                self.tick(t, dt)
-            self.draw(t)
-            time.sleep(max(0.0, 1 / 30 - (time.monotonic() - t)))
+        signal.signal(signal.SIGWINCH, lambda *_: setattr(self, "resized", True))
+        self.term.enter()
+        try:
+            last = time.monotonic()
+            while True:
+                t = time.monotonic()
+                dt, last = min(t - last, 0.1), t
+                if self.resized:
+                    self.resized = False
+                    self.term.resize()
+                    self.h, self.w = self.term.h, self.term.w
+                    self.messages = [m for m in self.messages
+                                     if m.row < self.h - 1 and m.x0 + len(m.text) < self.w - 1]
+                    self.streams = [s for s in self.streams if s.row < self.h]
+                    self.panel_rect = None
+                    self.term.out("\x1b[2J")
+                if not self.paused:
+                    self.tick(t, dt)
+                self.draw(t)
+                data = self.term.read((t + 1 / 30) - time.monotonic())
+                if data and not self.handle_bytes(data, t):
+                    return
+        finally:
+            self.term.leave()
 
 
 def main():
@@ -512,14 +910,19 @@ def main():
     ap.add_argument("--offline", action="store_true", help="poetic lines only, no news fetch")
     ap.add_argument("--ascii", action="store_true", help="ASCII glyphs (no katakana)")
     ap.add_argument("--topics", help="comma-separated topics, overrides config")
+    ap.add_argument("--places", help="comma-separated places for local intel, overrides config")
     ap.add_argument("--speed", type=float, help="speed multiplier")
     ap.add_argument("--version", action="version", version=f"meanwhile {VERSION}")
     args = ap.parse_args()
 
-    locale.setlocale(locale.LC_ALL, "")
+    if not sys.stdout.isatty() or not sys.stdin.isatty():
+        sys.exit("meanwhile needs an interactive terminal")
+
     cfg = load_config()
     if args.topics:
         cfg["topics"] = [s.strip() for s in args.topics.split(",") if s.strip()]
+    if args.places is not None:
+        cfg["places"] = [s.strip() for s in args.places.split(",") if s.strip()]
     if args.speed:
         cfg["speed"] = args.speed
     if args.ascii:
@@ -529,7 +932,7 @@ def main():
     feed = Newsfeed(cfg, key)
     feed.start()
     try:
-        curses.wrapper(lambda scr: App(scr, cfg, feed).run())
+        App(Term(), cfg, feed).run()
     except KeyboardInterrupt:
         pass
 
