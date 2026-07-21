@@ -41,6 +41,7 @@ DEFAULT_CONFIG = {
     "message_every_seconds": 1.8,
     "density": 0.75,
     "speed": 1.0,
+    "focus": False,
     "ascii_only": False,
     "env_files": ["~/dev/tom-os/.env", "~/dev/exa-newsdesk/.env"],
 }
@@ -381,33 +382,41 @@ def sgr(*codes):
     return "\x1b[" + ";".join(map(str, codes)) + "m"
 
 
-def build_palette(basic=False):
+def build_palette(basic=False, focus=False):
+    """focus=False: messages sit embedded in the code, a shade above the field.
+    focus=True: headlines surface — bright white, full contrast."""
     if not basic:
-        return {
+        pal = {
             "head": sgr(0, 1, 38, 5, 48),
             "trail": [sgr(0, 38, 5, 46), sgr(0, 38, 5, 40), sgr(0, 38, 5, 34),
                       sgr(0, 38, 5, 28), sgr(0, 38, 5, 22), sgr(0, 2, 38, 5, 22)],
             "residue": [sgr(0, 38, 5, 22), sgr(0, 2, 38, 5, 28),
                         sgr(0, 2, 38, 5, 22), sgr(0, 2, 38, 5, 235)],
-            "news": sgr(0, 1, 38, 5, 255),
-            "local": sgr(0, 1, 38, 5, 87),
-            "poetic": sgr(0, 3, 38, 5, 222),
-            "scramble": sgr(0, 1, 38, 5, 231),
             "dim": sgr(0, 38, 5, 241),
             "blank": sgr(0),
         }
+        if focus:
+            pal.update(news=sgr(0, 1, 38, 5, 255), local=sgr(0, 1, 38, 5, 87),
+                       poetic=sgr(0, 38, 5, 222), scramble=sgr(0, 1, 38, 5, 231))
+        else:
+            pal.update(news=sgr(0, 38, 5, 120), local=sgr(0, 38, 5, 80),
+                       poetic=sgr(0, 38, 5, 179), scramble=sgr(0, 1, 38, 5, 83))
+        return pal
     g, gd = sgr(0, 32), sgr(0, 2, 32)
-    return {
+    pal = {
         "head": sgr(0, 1, 32),
         "trail": [sgr(0, 1, 32), g, g, gd, gd, gd],
         "residue": [gd],
-        "news": sgr(0, 1, 37),
-        "local": sgr(0, 1, 36),
-        "poetic": sgr(0, 33),
-        "scramble": sgr(0, 1, 37),
         "dim": sgr(0, 2, 37),
         "blank": sgr(0),
     }
+    if focus:
+        pal.update(news=sgr(0, 1, 37), local=sgr(0, 1, 36),
+                   poetic=sgr(0, 33), scramble=sgr(0, 1, 37))
+    else:
+        pal.update(news=sgr(0, 1, 32), local=sgr(0, 36),
+                   poetic=sgr(0, 33), scramble=sgr(0, 1, 32))
+    return pal
 
 
 class Term:
@@ -594,9 +603,9 @@ HELP = [
     "  q        quit              space   pause",
     "  n        a headline now    o       something true now",
     "  t        edit topics       g       edit places (local intel)",
-    "  m        toggle news       p       toggle poetic",
-    "  + / -    speed             r       refresh headlines",
-    "  s        status bar        ?       help",
+    "  f        focus mode        m       toggle news",
+    "  p        toggle poetic     r       refresh headlines",
+    "  + / -    speed             s       status bar",
     "",
     "  in editors: type + enter adds · 1-9 removes · esc closes",
     "",
@@ -609,8 +618,9 @@ class App:
         self.term = term
         self.cfg = cfg
         self.feed = feed
-        basic = "256" not in os.environ.get("TERM", "") and not os.environ.get("COLORTERM")
-        self.pal = build_palette(basic)
+        self.basic = "256" not in os.environ.get("TERM", "") and not os.environ.get("COLORTERM")
+        self.focus = bool(cfg.get("focus", False))
+        self.pal = build_palette(self.basic, self.focus)
         self.glyphs = GLYPHS_ASCII if cfg["ascii_only"] else GLYPHS_KATA
         self.h, self.w = term.h, term.w
         self.streams = []
@@ -850,6 +860,12 @@ class App:
                 self.spawn_message(t, force="news")
             elif b == ord("o"):
                 self.spawn_message(t, force="poetic")
+            elif b == ord("f"):
+                self.focus = not self.focus
+                self.cfg["focus"] = self.focus
+                self.pal = build_palette(self.basic, self.focus)
+                save_config(self.cfg)
+                self.flash("focus — text surfaced" if self.focus else "embedded — text set back", t)
             elif b == ord("t"):
                 self.editor = {"kind": "topics", "input": "", "pending": b""}
             elif b == ord("g"):

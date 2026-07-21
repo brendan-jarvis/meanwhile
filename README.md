@@ -6,7 +6,7 @@ A full wall of code sweeps across the terminal — streams leave settled
 glyphs behind, erasers carve moving windows of darkness through them —
 and out of the noise, real things decode into view:
 
-- **News** (white) — live headlines from the [Exa](https://exa.ai) API
+- **News** (light green; bright white in focus mode) — live headlines from the [Exa](https://exa.ai) API
   (`fast` search, their cheapest tier), narrowed by your topics.
   Headlines are OSC 8 hyperlinks: click (or ctrl+click, terminal-dependent)
   to open the story.
@@ -37,7 +37,7 @@ Options: `--offline` · `--ascii` · `--topics "climate, space"` ·
 | `t` | **edit topics** | `g` | **edit places (local intel)** |
 | `m` | toggle news | `p` | toggle poetic |
 | `+` / `-` | speed | `r` | refresh headlines |
-| `s` | status bar | `?` | help |
+| `f` | focus mode (surface text) | `s` / `?` | status / help |
 
 In the topic/place editors: type + enter adds an entry, `1`–`9` removes
 one, esc closes. Edits persist to config and refetch immediately.
