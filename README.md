@@ -189,7 +189,33 @@ meanwhile --check-feeds -v --places "New Zealand"
 - Every so often — not often — the rain has something to say to you
   directly. If you're impatient, you know whose name to type.
 
+## Performance (Rust fork)
+
+Rough numbers from a release build on Linux/WSL while raining:
+
+| | Typical |
+|--|---------|
+| **CPU** | ~0.3% of one core |
+| **RSS** | ~8–9 MB |
+| **Binary** | ~4–5 MB unstripped (~4 MB stripped) |
+| **PTY traffic** | tens of KB/s (capped fps + dirty buffer) |
+
+The original Python app was a single ~55 KB stdlib script and already claimed
+only ~1–2% CPU — ambient rain was never a number-crunching problem. The costly
+part of watching it is almost always **the terminal repainting**, not the
+language. This port keeps that load down with a dirty frame buffer, an **8 fps**
+default, and modest stream density.
+
+**Was the port worth it?** As a pure speed exercise, only a little: same idea,
+more build ceremony, a larger artifact than a `.py` file (Python itself still
+has to exist on the machine for the script path). As a *product* fork — yes:
+one binary with no runtime dependency, RSS-first news without a search API
+key, theme inheritance, and diagnostics that make multi-pane WezTerm use
+pleasant. The interesting scorecard is **ship + evolve**, not shaving 1% CPU
+off drawing characters.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Original copyright Tom Davenport; this fork
 continues under the same license.
+
