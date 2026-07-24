@@ -17,6 +17,7 @@ git tag v0.4.0 && git push origin v0.4.0  # tag the release
 cd ~/dev/meanwhile/packaging/aur
 sha=$(curl -sL https://github.com/tomdavenport/meanwhile/archive/refs/tags/v0.4.0.tar.gz | sha256sum | cut -d' ' -f1)
 sed -i "s/FILL_ON_RELEASE/$sha/" PKGBUILD
+# ensure Cargo.lock is committed so --locked works in prepare()
 makepkg --printsrcinfo > .SRCINFO
 makepkg -si            # local test install: builds and installs the package
 ```

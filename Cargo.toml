@@ -1,0 +1,25 @@
+[package]
+name = "meanwhile"
+version = "0.4.0"
+edition = "2021"
+description = "Horizontal matrix rain of things happening right now"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/tomdavenport/meanwhile"
+keywords = ["terminal", "matrix", "news", "tui"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "meanwhile"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+ureq = { version = "2", features = ["json"] }
+libc = "0.2"
+rand = "0.8"
+clap = { version = "4", features = ["derive"] }
+textwrap = "0.16"
+dirs = "5"

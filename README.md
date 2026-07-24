@@ -26,16 +26,24 @@ Glance at it and it's rain; look at it and it's the world.
   where the sun is rising at this second, what the season is doing at the
   poles. Every line is true, and more are finding their way in.
 
-Zero dependencies. One Python file. Runs anywhere Python 3.11+ and a
-terminal exist.
+Written in Rust. One binary. Runs anywhere a modern terminal exists.
 
 ## Install
+
+From source (Rust 1.70+):
 
 ```sh
 git clone https://github.com/tomdavenport/meanwhile.git
 cd meanwhile
-ln -sf "$PWD/meanwhile.py" ~/.local/bin/meanwhile
+cargo install --path .
 meanwhile
+```
+
+Or build and link without installing to cargo's bin dir:
+
+```sh
+cargo build --release
+ln -sf "$PWD/target/release/meanwhile" ~/.local/bin/meanwhile
 ```
 
 On Arch: `yay -S meanwhile-rain` (the plain name was taken by the old
@@ -44,7 +52,7 @@ Lotus Sametime library, of all things).
 News comes from the [Exa](https://exa.ai) search API (`fast` type — their
 cheapest tier, a few requests per refresh). Put `EXA_API_KEY` in your
 environment (or point `env_files` in the config at a `.env` that has it).
-**No key? It still runs**, poetic-only.
+**No key? It still runs**, poetic-only. Or pass `--offline`.
 
 ## Keys
 
@@ -99,6 +107,21 @@ ANSI fallback. Set `"theme": "matrix"` in the config (or pass
 | `env_files` | where to find `EXA_API_KEY` |
 
 Headlines are cached in `~/.cache/meanwhile/` so launch is instant.
+
+## CLI
+
+```
+meanwhile [OPTIONS]
+
+      --offline          poetic lines only, no news fetch
+      --ascii            ASCII glyphs (no katakana)
+      --topics <TOPICS>  comma-separated topics, overrides config
+      --places <PLACES>  comma-separated places for local intel
+      --speed <SPEED>    speed multiplier
+      --theme <THEME>    auto | matrix
+  -h, --help
+  -V, --version
+```
 
 ## Notes
 
