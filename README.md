@@ -44,6 +44,37 @@ like WezTerm.
 
 ## Install
 
+### Prebuilt binaries (no Rust required)
+
+GitHub **Releases** ship ready-to-run archives for Linux, macOS, and Windows:
+
+**https://github.com/brendan-jarvis/meanwhile/releases**
+
+```sh
+# Example: Linux x86_64
+curl -sL https://github.com/brendan-jarvis/meanwhile/releases/latest/download/meanwhile-x86_64-unknown-linux-gnu.tar.gz \
+  | tar -xz
+chmod +x meanwhile
+./meanwhile
+
+# Optional install
+mkdir -p ~/.local/bin && mv meanwhile ~/.local/bin/
+```
+
+Pick the asset that matches your machine:
+
+| Asset | Platform |
+|-------|----------|
+| `meanwhile-x86_64-unknown-linux-gnu.tar.gz` | Linux Intel/AMD |
+| `meanwhile-aarch64-unknown-linux-gnu.tar.gz` | Linux ARM64 |
+| `meanwhile-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon |
+| `meanwhile-x86_64-apple-darwin.tar.gz` | macOS Intel |
+| `meanwhile-x86_64-pc-windows-msvc.zip` | Windows x64 |
+
+Each archive includes the binary, `README.md`, and `LICENSE`.
+
+### Build from source
+
 Rust 1.70+ (edition 2021):
 
 ```sh
@@ -53,17 +84,14 @@ cargo install --path .
 meanwhile
 ```
 
-Or build without installing into Cargo's bin dir:
+Or:
 
 ```sh
 cargo build --release
 ./target/release/meanwhile
-# optional:
-ln -sf "$PWD/target/release/meanwhile" ~/.local/bin/meanwhile
 ```
 
-After pulling changes, always rebuild (`cargo build --release` or
-`cargo install --path . --force`) so CLI flags match the source.
+After pulling changes, rebuild so CLI flags match the source.
 
 Arch users may still find an AUR package for the upstream project
 (`meanwhile-rain`); packaging files under `packaging/` describe a cargo-based

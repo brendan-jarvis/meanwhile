@@ -1,6 +1,6 @@
 [package]
 name = "meanwhile"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "Horizontal matrix rain of things happening right now"
 license = "MIT"
@@ -23,3 +23,9 @@ rand = "0.8"
 clap = { version = "4", features = ["derive"] }
 textwrap = "0.16"
 dirs = "5"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
