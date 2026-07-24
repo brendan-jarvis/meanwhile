@@ -17,6 +17,13 @@ pub fn cache_path() -> PathBuf {
         .join(".cache/meanwhile/headlines.json")
 }
 
+/// Last feed-fetch diagnostic log (written every refresh).
+pub fn fetch_log_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".cache/meanwhile/last-fetch.log")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {

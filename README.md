@@ -149,8 +149,24 @@ meanwhile [OPTIONS]
       --places <PLACES>  comma-separated places for local intel
       --speed <SPEED>    speed multiplier
       --theme <THEME>    auto | matrix
+  -v, --verbose      log each feed fetch to stderr
+      --check-feeds  fetch once, print diagnostics, exit (no TUI)
   -h, --help
   -V, --version
+```
+
+### Debugging feeds
+
+```sh
+# one-shot NZ check (no rain UI)
+meanwhile --check-feeds --places "New Zealand"
+
+# same, with timing lines on stderr too
+meanwhile --check-feeds -v --places "New Zealand"
+
+# while running: press `d` for the last fetch log, `r` to retry
+# log file always written to:
+#   ~/.cache/meanwhile/last-fetch.log
 ```
 
 ## Notes

@@ -9,7 +9,7 @@ mod theme;
 use app::App;
 use clap::Parser;
 use config::{load_config, resolve_api_key, VERSION};
-use news::Newsfeed;
+use news::{run_feed_check, Newsfeed};
 use std::process;
 use std::sync::Arc;
 use term::{is_tty, Term};
@@ -41,15 +41,18 @@ struct Cli {
     /// palette source
     #[arg(long, value_parser = ["auto", "matrix"])]
     theme: Option<String>,
+
+    /// log each feed fetch to stderr
+    #[arg(long, short = 'v')]
+    verbose: bool,
+
+    /// fetch configured feeds once, print diagnostics, exit (no TUI)
+    #[arg(long)]
+    check_feeds: bool,
 }
 
 fn main() {
     let args = Cli::parse();
-
-    if !is_tty() {
-        eprintln!("meanwhile needs an interactive terminal");
-        process::exit(1);
-    }
 
     let mut cfg = load_config();
     if let Some(topics) = args.topics {
@@ -76,13 +79,28 @@ fn main() {
         cfg.ascii_only = true;
     }
 
+    if args.check_feeds {
+        let code = run_feed_check(&cfg, args.verbose);
+        process::exit(code);
+    }
+
+    if !is_tty() {
+        eprintln!("meanwhile needs an interactive terminal (or use --check-feeds)");
+        process::exit(1);
+    }
+
     // Headlines come from RSS (no key). Exa key is optional for richer summaries.
     let key = if args.offline {
         None
     } else {
         resolve_api_key(&cfg)
     };
-    let feed = Arc::new(Newsfeed::new(cfg.clone(), key, args.offline));
+    let feed = Arc::new(Newsfeed::new(
+        cfg.clone(),
+        key,
+        args.offline,
+        args.verbose,
+    ));
     feed.start();
 
     let term = match Term::new() {

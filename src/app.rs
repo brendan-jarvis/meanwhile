@@ -33,12 +33,14 @@ const HELP: &[&str] = &[
     "  f        focus mode        o       something true now",
     "  m        toggle news       p       toggle poetic",
     "  + / -    speed             r       refresh headlines",
-    "  s        status bar        ?       help",
+    "  s        status bar        d       feed debug log",
+    "  ?        help",
     "",
     "  in editors: type + enter adds · 1-9 removes · esc closes",
     "  a decoded story dissolves on its own · esc or a click hurries it",
     "",
     "  any other key closes help",
+    "  CLI: meanwhile --check-feeds --places 'New Zealand'",
 ];
 
 struct Editor {
@@ -95,6 +97,7 @@ pub struct App {
     paused: bool,
     show_status: bool,
     show_help: bool,
+    show_debug: bool,
     editor: Option<Editor>,
     picker: Option<Picker>,
     reader_pending: Arc<Mutex<Option<(u64, Article)>>>,
@@ -157,6 +160,7 @@ impl App {
             paused: false,
             show_status: false,
             show_help: false,
+            show_debug: false,
             editor: None,
             picker: None,
             reader_pending: Arc::new(Mutex::new(None)),
@@ -432,7 +436,10 @@ impl App {
             self.tick_wake(t, dt);
             return;
         }
-        let quiet = self.picker.is_none() && self.editor.is_none() && !self.show_help;
+        let quiet = self.picker.is_none()
+            && self.editor.is_none()
+            && !self.show_help
+            && !self.show_debug;
         if quiet && rand::thread_rng().gen::<f64>() < dt / 3600.0 {
             self.trigger_wake(t);
             return;
@@ -481,7 +488,11 @@ impl App {
             self.mount_summary(t, tok, art);
         }
 
-        let rect = if self.show_help || self.editor.is_some() || self.picker.is_some() {
+        let rect = if self.show_help
+            || self.show_debug
+            || self.editor.is_some()
+            || self.picker.is_some()
+        {
             Some(self.compute_panel_rect())
         } else {
             None
@@ -597,7 +608,11 @@ impl App {
                 .span_cells(self.h as isize - 1, x, dim, &shown);
         }
 
-        if self.show_help || self.editor.is_some() || self.picker.is_some() {
+        if self.show_help
+            || self.show_debug
+            || self.editor.is_some()
+            || self.picker.is_some()
+        {
             self.draw_panel();
         }
         let _ = self.term.present();
@@ -737,6 +752,38 @@ impl App {
         if self.show_help {
             return HELP.iter().map(|s| s.to_string()).collect();
         }
+        if self.show_debug {
+            let mut lines = vec![
+                " ▞ feed debug ".into(),
+                String::new(),
+            ];
+            let log = self.feed.last_log();
+            if log.is_empty() {
+                // Fall back to on-disk log from last process.
+                let path = crate::config::fetch_log_path();
+                match std::fs::read_to_string(&path) {
+                    Ok(t) if !t.trim().is_empty() => {
+                        lines.push(format!("   (from {})", path.display()));
+                        lines.push(String::new());
+                        for l in t.lines().take(18) {
+                            lines.push(format!("  {l}"));
+                        }
+                    }
+                    _ => {
+                        lines.push("   no fetch log yet — press r to refresh".into());
+                        lines.push(format!("   or: meanwhile --check-feeds"));
+                        lines.push(format!("   log path: {}", path.display()));
+                    }
+                }
+            } else {
+                for l in log.lines().take(18) {
+                    lines.push(format!("  {l}"));
+                }
+            }
+            lines.push(String::new());
+            lines.push("   r refreshes · d/esc closes · --check-feeds on CLI".into());
+            return lines;
+        }
         if let Some(ref picker) = self.picker {
             let mut lines = vec![" ▚ decode a story ".into(), String::new()];
             for (i, l) in self.shown_links.iter().enumerate() {
@@ -809,6 +856,8 @@ impl App {
             } else {
                 self.pal.poetic
             }
+        } else if self.show_debug {
+            self.pal.poetic
         } else {
             self.pal.news
         };
@@ -839,6 +888,7 @@ impl App {
     fn close_panel(&mut self) {
         self.editor = None;
         self.show_help = false;
+        self.show_debug = false;
         self.picker = None;
         self.panel_rect = None;
         self.term.clear_screen();
@@ -1034,9 +1084,14 @@ impl App {
             return true;
         }
 
-        if self.show_help {
+        if self.show_help || self.show_debug {
             if b == b'q' || b == 3 {
                 return false;
+            }
+            if self.show_debug && b == b'r' {
+                self.feed.wake();
+                self.flash("refreshing headlines…", t);
+                return true;
             }
             self.close_panel();
             return true;
@@ -1133,6 +1188,8 @@ impl App {
             if !self.show_status {
                 self.clear_row(self.h as isize - 1);
             }
+        } else if b == b'd' {
+            self.show_debug = true;
         } else if b == b'?' {
             self.show_help = true;
         }

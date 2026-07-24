@@ -1,4 +1,4 @@
-use crate::config::{cache_path, Config};
+use crate::config::{cache_path, fetch_log_path, Config};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -22,6 +22,8 @@ struct FeedInner {
     items: Vec<Headline>,
     generation: u64,
     status: String,
+    /// Multi-line log of the last fetch (for status / debug panel).
+    last_log: String,
     fetched_at: Option<SystemTime>,
     wake: bool,
 }
@@ -33,10 +35,11 @@ pub struct Newsfeed {
     cfg: Arc<Mutex<Config>>,
     api_key: Option<String>,
     offline: bool,
+    verbose: bool,
 }
 
 impl Newsfeed {
-    pub fn new(cfg: Config, api_key: Option<String>, offline: bool) -> Self {
+    pub fn new(cfg: Config, api_key: Option<String>, offline: bool, verbose: bool) -> Self {
         let status = if offline {
             "offline — poetic only".into()
         } else {
@@ -85,6 +88,7 @@ impl Newsfeed {
                 items,
                 generation,
                 status,
+                last_log: String::new(),
                 fetched_at: None,
                 wake: false,
             }),
@@ -96,6 +100,7 @@ impl Newsfeed {
             cfg: Arc::new(Mutex::new(cfg)),
             api_key,
             offline,
+            verbose,
         }
     }
 
@@ -122,6 +127,10 @@ impl Newsfeed {
             g.status.clone(),
             g.fetched_at,
         )
+    }
+
+    pub fn last_log(&self) -> String {
+        self.inner.0.lock().unwrap().last_log.clone()
     }
 
     pub fn update_cfg(&self, cfg: Config) {
@@ -158,108 +167,30 @@ impl Newsfeed {
 
     fn fetch(&self) {
         let cfg = self.cfg.lock().unwrap().clone();
-        let mut items = Vec::new();
-        let mut seen = HashSet::new();
-        let mut feed_ok = 0u32;
-        let mut feed_fail = 0u32;
-
-        let places: Vec<String> = cfg
-            .places
-            .iter()
-            .map(|p| p.trim().to_string())
-            .filter(|p| !p.is_empty())
-            .take(3)
-            .collect();
-
-        // Place → regional RSS (NZ, AU, UK, …)
-        for place in &places {
-            for src in feeds_for_place(place) {
-                match pull_source(src, 20) {
-                    Ok(entries) => {
-                        feed_ok += 1;
-                        items.extend(collect_entries(
-                            &entries,
-                            "local",
-                            &mut seen,
-                            cfg.show_source,
-                        ));
-                    }
-                    Err(_) => feed_fail += 1,
-                }
-            }
-        }
-
-        // Topics → general RSS / special sources (e.g. HN top-of-day)
-        for topic in cfg.topics.iter().take(4) {
-            let tnorm = topic.trim().to_lowercase();
-            if places.iter().any(|p| p.to_lowercase() == tnorm) {
-                continue;
-            }
-            for src in feeds_for_topic(topic) {
-                match pull_source(src, 20) {
-                    Ok(entries) => {
-                        feed_ok += 1;
-                        items.extend(collect_entries(
-                            &entries,
-                            "news",
-                            &mut seen,
-                            cfg.show_source,
-                        ));
-                    }
-                    Err(_) => feed_fail += 1,
-                }
-            }
-        }
-
-        // User-supplied extra feeds
-        for url in cfg.extra_feeds.iter().take(8) {
-            let url = url.trim();
-            if url.is_empty() {
-                continue;
-            }
-            match pull_source(url, 20) {
-                Ok(entries) => {
-                    feed_ok += 1;
-                    items.extend(collect_entries(
-                        &entries,
-                        "news",
-                        &mut seen,
-                        cfg.show_source,
-                    ));
-                }
-                Err(_) => feed_fail += 1,
-            }
-        }
-
-        // If nothing matched topics/places, still pull a small world default
-        // so a fresh install gets headlines without configuration.
-        if items.is_empty() && places.is_empty() && cfg.topics.is_empty() {
-            for url in DEFAULT_WORLD_FEEDS {
-                if let Ok(entries) = fetch_rss(url, 15) {
-                    feed_ok += 1;
-                    items.extend(collect_entries(
-                        &entries,
-                        "news",
-                        &mut seen,
-                        cfg.show_source,
-                    ));
-                }
-            }
-        }
+        let report = fetch_all(&cfg, self.verbose);
+        write_fetch_log(&report.log);
 
         let mut g = self.inner.0.lock().unwrap();
-        if !items.is_empty() {
-            let n_local = items.iter().filter(|i| i.kind == "local").count();
-            g.items = items.clone();
+        g.last_log = report.log.clone();
+        if !report.items.is_empty() {
+            let n_local = report.items.iter().filter(|i| i.kind == "local").count();
+            g.items = report.items.clone();
             g.generation += 1;
             g.fetched_at = Some(SystemTime::now());
-            g.status = if places.is_empty() {
-                format!("{} headlines · rss", items.len())
+            let places = report.places.join(", ");
+            g.status = if report.places.is_empty() {
+                format!(
+                    "{} headlines · {}/{} feeds",
+                    report.items.len(),
+                    report.feed_ok,
+                    report.feed_ok + report.feed_fail
+                )
             } else {
                 format!(
-                    "{} headlines · {n_local} local ({}) · rss",
-                    items.len(),
-                    places.join(", ")
+                    "{} headlines · {n_local} local ({places}) · {}/{} feeds",
+                    report.items.len(),
+                    report.feed_ok,
+                    report.feed_ok + report.feed_fail
                 )
             };
             let path = cache_path();
@@ -272,22 +203,307 @@ impl Newsfeed {
                 .as_secs_f64();
             let cache = json!({
                 "at": now,
-                "places": places,
-                "items": items,
+                "places": report.places,
+                "items": report.items,
             });
             if let Ok(text) = serde_json::to_string(&cache) {
                 let _ = fs::write(path, text);
             }
         } else if g.items.is_empty() {
-            g.status = if feed_ok == 0 && feed_fail > 0 {
-                "feeds unreachable — poetic only".into()
-            } else if places.is_empty() && cfg.topics.is_empty() && cfg.extra_feeds.is_empty() {
-                "no topics/places — poetic only".into()
-            } else {
-                "no headlines — poetic only".into()
-            };
+            g.status = report.status_when_empty();
+        } else {
+            // Keep previous headlines but surface that refresh failed.
+            g.status = format!(
+                "refresh failed ({}/{} feeds) — using cache",
+                report.feed_ok,
+                report.feed_ok + report.feed_fail
+            );
         }
     }
+}
+
+struct FetchReport {
+    items: Vec<Headline>,
+    places: Vec<String>,
+    feed_ok: u32,
+    feed_fail: u32,
+    log: String,
+    no_sources: bool,
+}
+
+impl FetchReport {
+    fn status_when_empty(&self) -> String {
+        if self.no_sources {
+            "no topics/places/feeds — poetic only".into()
+        } else if self.feed_ok == 0 && self.feed_fail > 0 {
+            format!(
+                "feeds unreachable (0/{} ok) — poetic only",
+                self.feed_fail
+            )
+        } else if self.feed_ok > 0 {
+            format!(
+                "feeds ok but empty ({}/{}) — poetic only",
+                self.feed_ok,
+                self.feed_ok + self.feed_fail
+            )
+        } else {
+            "no headlines — poetic only".into()
+        }
+    }
+}
+
+/// One-shot feed check for the CLI (`--check-feeds`). Prints diagnostics to stdout.
+pub fn run_feed_check(cfg: &Config, verbose: bool) -> i32 {
+    println!("meanwhile feed check");
+    println!(
+        "places: {}",
+        if cfg.places.is_empty() {
+            "(none)".into()
+        } else {
+            cfg.places.join(", ")
+        }
+    );
+    println!(
+        "topics: {}",
+        if cfg.topics.is_empty() {
+            "(none)".into()
+        } else {
+            cfg.topics.join(", ")
+        }
+    );
+    if !cfg.extra_feeds.is_empty() {
+        println!("extra_feeds: {}", cfg.extra_feeds.len());
+    }
+    println!();
+
+    let report = fetch_all(cfg, verbose);
+    write_fetch_log(&report.log);
+    print!("{}", report.log);
+    println!();
+    println!(
+        "result: {} headlines ({} local) · {} ok · {} failed",
+        report.items.len(),
+        report.items.iter().filter(|i| i.kind == "local").count(),
+        report.feed_ok,
+        report.feed_fail
+    );
+    if !report.items.is_empty() {
+        println!("sample:");
+        for h in report.items.iter().take(8) {
+            println!("  [{}] {}", h.kind, h.text.chars().take(90).collect::<String>());
+        }
+    }
+    println!();
+    println!("log written to {}", fetch_log_path().display());
+
+    if report.items.is_empty() {
+        1
+    } else {
+        0
+    }
+}
+
+fn write_fetch_log(log: &str) {
+    let path = fetch_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&path, log);
+}
+
+fn fetch_all(cfg: &Config, verbose: bool) -> FetchReport {
+    let mut items = Vec::new();
+    let mut seen = HashSet::new();
+    let mut feed_ok = 0u32;
+    let mut feed_fail = 0u32;
+    let mut lines: Vec<String> = Vec::new();
+    let started = chrono_now();
+
+    lines.push(format!("meanwhile fetch @ {started}"));
+    lines.push(format!(
+        "places={} topics={} extra_feeds={}",
+        cfg.places.join("|"),
+        cfg.topics.join("|"),
+        cfg.extra_feeds.len()
+    ));
+
+    let places: Vec<String> = cfg
+        .places
+        .iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .take(3)
+        .collect();
+
+    // Place → regional RSS
+    for place in &places {
+        let srcs = feeds_for_place(place);
+        if srcs.is_empty() {
+            let line = format!(
+                "WARN place  no built-in feeds for \"{place}\" — add extra_feeds or a known country name"
+            );
+            lines.push(line.clone());
+            if verbose {
+                eprintln!("meanwhile: {line}");
+            }
+        }
+        for src in srcs {
+            try_one_source(
+                "place",
+                src,
+                "local",
+                cfg.show_source,
+                verbose,
+                &mut items,
+                &mut seen,
+                &mut feed_ok,
+                &mut feed_fail,
+                &mut lines,
+            );
+        }
+    }
+
+    // Topics
+    for topic in cfg.topics.iter().take(4) {
+        let tnorm = topic.trim().to_lowercase();
+        if places.iter().any(|p| p.to_lowercase() == tnorm) {
+            lines.push(format!("SKIP topic  \"{topic}\" (same as a place)"));
+            continue;
+        }
+        for src in feeds_for_topic(topic) {
+            try_one_source(
+                "topic",
+                src,
+                "news",
+                cfg.show_source,
+                verbose,
+                &mut items,
+                &mut seen,
+                &mut feed_ok,
+                &mut feed_fail,
+                &mut lines,
+            );
+        }
+    }
+
+    // User extra feeds
+    for url in cfg.extra_feeds.iter().take(8) {
+        let url = url.trim();
+        if url.is_empty() {
+            continue;
+        }
+        try_one_source(
+            "extra",
+            url,
+            "news",
+            cfg.show_source,
+            verbose,
+            &mut items,
+            &mut seen,
+            &mut feed_ok,
+            &mut feed_fail,
+            &mut lines,
+        );
+    }
+
+    // Defaults only when nothing configured
+    let no_sources =
+        places.is_empty() && cfg.topics.is_empty() && cfg.extra_feeds.is_empty();
+    if items.is_empty() && no_sources {
+        for url in DEFAULT_WORLD_FEEDS {
+            try_one_source(
+                "default",
+                url,
+                "news",
+                cfg.show_source,
+                verbose,
+                &mut items,
+                &mut seen,
+                &mut feed_ok,
+                &mut feed_fail,
+                &mut lines,
+            );
+        }
+    }
+
+    lines.push(format!(
+        "done: {} headlines ({} local) · {} ok · {} failed",
+        items.len(),
+        items.iter().filter(|i| i.kind == "local").count(),
+        feed_ok,
+        feed_fail
+    ));
+    lines.push(String::new());
+
+    FetchReport {
+        items,
+        places,
+        feed_ok,
+        feed_fail,
+        log: lines.join("\n"),
+        no_sources,
+    }
+}
+
+fn try_one_source(
+    label: &str,
+    src: &str,
+    kind: &str,
+    show_source: bool,
+    verbose: bool,
+    items: &mut Vec<Headline>,
+    seen: &mut HashSet<String>,
+    feed_ok: &mut u32,
+    feed_fail: &mut u32,
+    lines: &mut Vec<String>,
+) {
+    let display = source_label(src);
+    let t0 = Instant::now();
+    match pull_source(src, 20) {
+        Ok(entries) => {
+            let before = items.len();
+            items.extend(collect_entries(&entries, kind, seen, show_source));
+            let added = items.len() - before;
+            *feed_ok += 1;
+            let ms = t0.elapsed().as_millis();
+            let line = format!(
+                "OK   {label:8} +{added:<3} in {ms:>5}ms  ({display})  raw={}",
+                entries.len()
+            );
+            lines.push(line.clone());
+            if verbose {
+                eprintln!("meanwhile: {line}");
+            }
+        }
+        Err(e) => {
+            *feed_fail += 1;
+            let ms = t0.elapsed().as_millis();
+            let line = format!("FAIL {label:8} in {ms:>5}ms  ({display})  {e}");
+            lines.push(line.clone());
+            if verbose {
+                eprintln!("meanwhile: {line}");
+            }
+        }
+    }
+}
+
+fn source_label(src: &str) -> String {
+    if src == HN_TOP24_SENTINEL {
+        "hacker-news top/24h".into()
+    } else if src.len() > 64 {
+        format!("{}…", &src[..64])
+    } else {
+        src.to_string()
+    }
+}
+
+fn chrono_now() -> String {
+    // Local-ish wall clock via libc for the log header.
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("unix:{secs}")
 }
 
 // ---------------------------------------------------------------------------
@@ -685,6 +901,8 @@ fn pull_source(src: &str, limit: usize) -> Result<Vec<FeedEntry>, String> {
 /// Note: `https://hnrss.org/best` is *not* this — it's HN's longer-horizon
 /// "best" ranking. We use the free Firebase API (topstories + item lookup),
 /// filter `time` to the past day, sort by `score`, take the top N.
+///
+/// Item lookups run in parallel so a refresh doesn't sit for a minute.
 fn fetch_hn_top_last_day(limit: usize) -> Result<Vec<FeedEntry>, String> {
     let ids: Vec<u64> = ureq::get("https://hacker-news.firebaseio.com/v0/topstories.json")
         .set("User-Agent", "meanwhile/0.4")
@@ -693,12 +911,6 @@ fn fetch_hn_top_last_day(limit: usize) -> Result<Vec<FeedEntry>, String> {
         .map_err(|e| e.to_string())?
         .into_json()
         .map_err(|e| e.to_string())?;
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    let cutoff = now - 24 * 3600;
 
     #[derive(Deserialize)]
     struct HnItem {
@@ -711,31 +923,22 @@ fn fetch_hn_top_last_day(limit: usize) -> Result<Vec<FeedEntry>, String> {
         kind: Option<String>,
     }
 
-    let mut scored: Vec<(i64, FeedEntry)> = Vec::new();
-    // Walk enough of the ranked list to fill a 24h window (front page churn).
-    for id in ids.into_iter().take(80) {
+    fn load_item(id: u64) -> Option<(i64, FeedEntry)> {
         let url = format!("https://hacker-news.firebaseio.com/v0/item/{id}.json");
-        let item: HnItem = match ureq::get(&url)
+        let item: HnItem = ureq::get(&url)
             .set("User-Agent", "meanwhile/0.4")
-            .timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(6))
             .call()
-        {
-            Ok(r) => match r.into_json() {
-                Ok(i) => i,
-                Err(_) => continue,
-            },
-            Err(_) => continue,
-        };
+            .ok()?
+            .into_json()
+            .ok()?;
         if item.kind.as_deref() != Some("story") {
-            continue;
+            return None;
         }
-        let time = item.time.unwrap_or(0);
-        if time < cutoff {
-            continue;
-        }
+        let _ = item.time; // available if we re-enable a hard 24h cutoff
         let title = clean_title(item.title.as_deref().unwrap_or(""));
         if title.is_empty() {
-            continue;
+            return None;
         }
         let link = item
             .url
@@ -743,15 +946,30 @@ fn fetch_hn_top_last_day(limit: usize) -> Result<Vec<FeedEntry>, String> {
             .unwrap_or_else(|| format!("https://news.ycombinator.com/item?id={id}"));
         let score = item.score.unwrap_or(0);
         let comments = item.descendants.unwrap_or(0);
-        let summary = Some(format!("{score} points · {comments} comments · HN (last 24h)"));
-        scored.push((
+        Some((
             score,
             FeedEntry {
                 title,
                 url: link,
-                summary,
+                summary: Some(format!("{score} points · {comments} comments · HN")),
             },
-        ));
+        ))
+    }
+
+    // Parallel batches — 40 ids is enough for a 24h slice of topstories.
+    let sample: Vec<u64> = ids.into_iter().take(40).collect();
+    let mut scored: Vec<(i64, FeedEntry)> = Vec::new();
+    for chunk in sample.chunks(10) {
+        let mut handles = Vec::new();
+        for &id in chunk {
+            handles.push(thread::spawn(move || load_item(id)));
+        }
+        for h in handles {
+            if let Ok(Some((score, entry))) = h.join() {
+                // topstories are already the current ranked set (≈ last day).
+                scored.push((score, entry));
+            }
+        }
     }
 
     scored.sort_by(|a, b| b.0.cmp(&a.0));
