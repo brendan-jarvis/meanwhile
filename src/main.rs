@@ -3,6 +3,7 @@ mod config;
 mod news;
 mod poetic;
 mod rain;
+mod stocks;
 mod term;
 mod theme;
 
@@ -49,6 +50,14 @@ struct Cli {
     /// fetch configured feeds once, print diagnostics, exit (no TUI)
     #[arg(long)]
     check_feeds: bool,
+
+    /// pure stock-ticker marquee (no matrix rain)
+    #[arg(long)]
+    ticker: bool,
+
+    /// comma-separated Yahoo symbols for --ticker (e.g. AAPL,SPY,BTC-USD)
+    #[arg(long)]
+    symbols: Option<String>,
 }
 
 fn main() {
@@ -77,6 +86,17 @@ fn main() {
     }
     if args.ascii {
         cfg.ascii_only = true;
+    }
+    // --ticker is per-run only (does not rewrite config mode).
+    if args.ticker {
+        cfg.mode = "ticker".into();
+    }
+    if let Some(symbols) = args.symbols {
+        cfg.tickers = symbols
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
     }
 
     if args.check_feeds {

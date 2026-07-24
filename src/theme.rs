@@ -657,6 +657,10 @@ pub struct Palette {
     pub local: StyleId,
     pub poetic: StyleId,
     pub scramble: StyleId,
+    /// Classic ticker tape colours.
+    pub up: StyleId,
+    pub down: StyleId,
+    pub amber: StyleId,
 }
 
 struct StyleBuilder {
@@ -677,7 +681,7 @@ impl StyleBuilder {
     }
 
     fn finish(
-        self,
+        mut self,
         head: StyleId,
         trail: Vec<StyleId>,
         residue: Vec<StyleId>,
@@ -688,6 +692,10 @@ impl StyleBuilder {
         poetic: StyleId,
         scramble: StyleId,
     ) -> Palette {
+        // Classic tape: green up / red down / amber chrome (always truecolor).
+        let up = self.add(fg((0x22, 0xc5, 0x5e), &[1]));
+        let down = self.add(fg((0xef, 0x44, 0x44), &[1]));
+        let amber = self.add(fg((0xfb, 0xbf, 0x24), &[1]));
         Palette {
             sgr: self.sgr,
             head,
@@ -700,6 +708,9 @@ impl StyleBuilder {
             local,
             poetic,
             scramble,
+            up,
+            down,
+            amber,
         }
     }
 }

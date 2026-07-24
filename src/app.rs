@@ -2,7 +2,8 @@ use crate::config::{save_config, Config};
 use crate::news::{fetch_summary, Headline, Newsfeed};
 use crate::poetic::poetic_line;
 use crate::rain::{residue_at, Glyphs, Message, Noise};
-use crate::term::Term;
+use crate::stocks::StockFeed;
+use crate::term::{StyleId, Term};
 use crate::theme::{
     build_palette, load_auto_theme, query_terminal_theme, theme_sources_mtime, ThemeColors,
     Palette, GLYPHS_ASCII, GLYPHS_KATA,
@@ -28,21 +29,29 @@ const HELP: &[&str] = &[
     " meanwhile — things happening right now ",
     "",
     "  q        quit              space   pause",
+    "  $        ticker mode       (pure stock marquee — no rain)",
     "  click    decode a story    shift-click  open in browser",
     "  enter    pick one to decode",
     "  t        edit topics       g       edit places (local intel)",
     "  f        focus mode        o       something true now",
     "  m        toggle news       p       toggle poetic",
-    "  + / -    speed             r       refresh headlines",
+    "  + / -    speed             r       refresh",
     "  s        status bar        d       feed debug log",
     "  ?        help",
     "",
-    "  in editors: type + enter adds · 1-9 removes · esc closes",
-    "  a decoded story dissolves on its own · esc or a click hurries it",
-    "",
-    "  any other key closes help",
-    "  CLI: meanwhile --check-feeds --places 'New Zealand'",
+    "  ticker: classic scrolling quotes · $ returns to rain",
+    "  CLI: meanwhile --ticker   ·  meanwhile --check-feeds",
 ];
+
+struct TickerBand {
+    row: isize,
+    /// Integer cell offset into this band's own tape (not shared globally).
+    offset: isize,
+    /// +1 scroll left (content moves left), -1 scroll right.
+    dir: isize,
+    /// This row's exclusive slice of the universe — no symbol shared with other rows.
+    cells: Vec<(char, StyleId)>,
+}
 
 struct Editor {
     kind: String, // "topics" | "places"
@@ -114,7 +123,26 @@ pub struct App {
     poetic_on: bool,
     toast: (String, f64),
     spans: HashMap<isize, Vec<(isize, isize)>>,
+    /// Pure stock marquee — no matrix field at all.
+    ticker_mode: bool,
+    stock_feed: Option<Arc<StockFeed>>,
+    ticker_bands: Vec<TickerBand>,
+    /// Generation of quote snapshot last painted into band tapes.
+    ticker_gen: u64,
+    /// Discrete speed index into [`TICKER_FRAMES_PER_STEP`] (locked to 24 fps).
+    ticker_speed_idx: usize,
+    /// Frames since last global one-cell step (all rows advance together).
+    ticker_frame_accum: u32,
 }
+
+/// Fixed ticker redraw rate — speed steps are integer frames-per-cell at this fps.
+const TICKER_FPS: f64 = 24.0;
+
+/// Frames between cell steps at [`TICKER_FPS`], from slow → fast.
+/// cells/sec = 24 / frames:  1.5, 2, 3, 4, 6, 8, 12, 24
+const TICKER_FRAMES_PER_STEP: &[u32] = &[16, 12, 8, 6, 4, 3, 2, 1];
+/// Default: 8 frames → 3 cells/sec.
+const TICKER_SPEED_DEFAULT_IDX: usize = 2;
 
 impl App {
     pub fn new(term: Term, cfg: Config, feed: Arc<Newsfeed>) -> Self {
@@ -139,6 +167,7 @@ impl App {
         });
         let h = term.h;
         let w = term.w;
+        let ticker_mode = cfg.mode.eq_ignore_ascii_case("ticker");
         let mut term = term;
         term.set_styles(pal.sgr.clone());
         Self {
@@ -177,7 +206,279 @@ impl App {
             poetic_on: true,
             toast: (String::new(), 0.0),
             spans: HashMap::new(),
+            ticker_mode,
+            stock_feed: None,
+            ticker_bands: Vec::new(),
+            ticker_gen: 0,
+            ticker_speed_idx: TICKER_SPEED_DEFAULT_IDX,
+            ticker_frame_accum: 0,
         }
+    }
+
+    fn ticker_frames_per_step(&self) -> u32 {
+        TICKER_FRAMES_PER_STEP[self.ticker_speed_idx.min(TICKER_FRAMES_PER_STEP.len() - 1)]
+    }
+
+    fn ticker_cells_per_sec(&self) -> f64 {
+        TICKER_FPS / self.ticker_frames_per_step() as f64
+    }
+
+    fn ensure_stock_feed(&mut self) {
+        if self.stock_feed.is_some() {
+            return;
+        }
+        let feed = Arc::new(StockFeed::new(self.cfg.tickers.clone()));
+        feed.start();
+        self.stock_feed = Some(feed);
+    }
+
+    fn enter_ticker_mode(&mut self, t: f64) {
+        self.ticker_mode = true;
+        // Session-only — do not persist mode, or plain `meanwhile` stays stuck on tickers.
+        self.streams.clear();
+        self.messages.clear();
+        self.wake = None;
+        self.picker = None;
+        self.ticker_bands.clear();
+        self.ticker_gen = 0;
+        self.ticker_frame_accum = 0;
+        self.ensure_stock_feed();
+        if let Some(ref f) = self.stock_feed {
+            f.set_symbols(self.cfg.tickers.clone());
+            f.wake();
+        }
+        self.term.clear_screen();
+        self.blank_field();
+        self.flash("ticker mode — pure quotes · $ for rain", t);
+    }
+
+    fn enter_rain_mode(&mut self, t: f64) {
+        self.ticker_mode = false;
+        self.ticker_bands.clear();
+        self.ticker_frame_accum = 0;
+        self.term.clear_screen();
+        self.flash("rain mode", t);
+    }
+
+    /// Wipe the whole field to blank — used so ticker never sits on matrix residue.
+    fn blank_field(&mut self) {
+        let blank = self.pal.blank;
+        let w = self.w.saturating_sub(1).max(1);
+        let spaces = " ".repeat(w);
+        for y in 0..self.h {
+            self.term.span_cells(y as isize, 0, blank, &spaces);
+        }
+    }
+
+    fn quote_to_cells(&self, q: &crate::stocks::Quote) -> Vec<(char, StyleId)> {
+        let mut cells = Vec::new();
+        let dir = q.direction();
+        let chg = match dir {
+            1 => self.pal.up,
+            -1 => self.pal.down,
+            _ => self.pal.amber,
+        };
+        for ch in format!("  {} ", q.symbol).chars() {
+            cells.push((ch, self.pal.amber));
+        }
+        for ch in format!("{:.2} ", q.price).chars() {
+            cells.push((ch, self.pal.reader));
+        }
+        let arrow = if dir > 0 {
+            "▲"
+        } else if dir < 0 {
+            "▼"
+        } else {
+            "═"
+        };
+        let chg_txt = format!("{}{:.2} ({:+.2}%)", arrow, q.change.abs(), q.change_pct);
+        for ch in chg_txt.chars() {
+            cells.push((ch, chg));
+        }
+        for ch in "  ···  ".chars() {
+            cells.push((ch, self.pal.dim));
+        }
+        cells
+    }
+
+    /// Build band rows and assign each quote to exactly one band so a symbol
+    /// never appears twice on screen (multiple rows used to share one looping tape).
+    fn rebuild_ticker_layout(&mut self) {
+        let Some(ref feed) = self.stock_feed else {
+            return;
+        };
+        let (mut quotes, _status, gen) = feed.snapshot();
+        // Alphabetical A→Z so layout is top→bottom, left→right in order.
+        quotes.sort_by(|a, b| {
+            a.symbol
+                .to_ascii_uppercase()
+                .cmp(&b.symbol.to_ascii_uppercase())
+        });
+
+        let usable = self.h.saturating_sub(if self.show_status { 1 } else { 0 }).max(1);
+        let draw_w = self.w.saturating_sub(1).max(1);
+
+        // How many rows? Fill the screen when we have enough names; keep enough
+        // quotes per row that several tickers are visible at once (~35–45 cols each).
+        let min_quotes_per_band = 6usize;
+        let n_bands = if quotes.is_empty() {
+            1
+        } else {
+            let by_density = (quotes.len() / min_quotes_per_band).max(1);
+            by_density.min(usable)
+        };
+        // Spread bands evenly across the full height (no empty half-screen gutters).
+        let rows: Vec<isize> = if n_bands == 1 {
+            vec![(usable / 2) as isize]
+        } else {
+            (0..n_bands)
+                .map(|i| (i * (usable - 1) / (n_bands - 1)) as isize)
+                .collect()
+        };
+
+        let structure_ok = self.ticker_bands.len() == n_bands
+            && self
+                .ticker_bands
+                .iter()
+                .zip(rows.iter())
+                .all(|(b, r)| b.row == *r);
+        if structure_ok
+            && gen == self.ticker_gen
+            && self.ticker_bands.iter().all(|b| !b.cells.is_empty())
+        {
+            return;
+        }
+        self.ticker_gen = gen;
+
+        // Contiguous A→Z partitions: top band = earliest names, within each
+        // band tape order is left→right alphabetical.
+        let mut buckets: Vec<Vec<&crate::stocks::Quote>> = vec![Vec::new(); n_bands];
+        if !quotes.is_empty() {
+            let chunk = (quotes.len() + n_bands - 1) / n_bands;
+            for (i, q) in quotes.iter().enumerate() {
+                let b = (i / chunk).min(n_bands - 1);
+                buckets[b].push(q);
+            }
+        }
+
+        let mut rng = rand::thread_rng();
+        let mut bands = Vec::with_capacity(n_bands);
+        for (i, row) in rows.into_iter().enumerate() {
+            let dir = if i % 2 == 0 { 1 } else { -1 };
+            let mut cells: Vec<(char, StyleId)> = Vec::new();
+            if buckets[i].is_empty() {
+                if i == 0 {
+                    for ch in "  fetching quotes…  ".chars() {
+                        cells.push((ch, self.pal.amber));
+                    }
+                }
+            } else {
+                for q in &buckets[i] {
+                    cells.extend(self.quote_to_cells(q));
+                }
+            }
+            // Pad with spaces only — never repeat quotes.
+            while cells.len() < draw_w {
+                cells.push((' ', self.pal.blank));
+            }
+            for _ in 0..(draw_w / 4).max(4) {
+                cells.push((' ', self.pal.blank));
+            }
+
+            let len = cells.len().max(1) as isize;
+            bands.push(TickerBand {
+                row,
+                offset: if structure_ok && i < self.ticker_bands.len() {
+                    self.ticker_bands[i].offset.rem_euclid(len)
+                } else {
+                    rng.gen_range(0..len)
+                },
+                dir,
+                cells,
+            });
+        }
+        self.ticker_bands = bands;
+    }
+
+    fn tick_ticker(&mut self, _dt: f64) {
+        self.ensure_stock_feed();
+        self.rebuild_ticker_layout();
+        // Frame-locked step: at TICKER_FPS, advance every N frames so +/- speed
+        // lands on even integer cells/sec (24/N), not fractional 1.25× periods.
+        let n = self.ticker_frames_per_step().max(1);
+        self.ticker_frame_accum = self.ticker_frame_accum.saturating_add(1);
+        if self.ticker_frame_accum < n {
+            return;
+        }
+        self.ticker_frame_accum = 0;
+        for b in &mut self.ticker_bands {
+            let len = b.cells.len().max(1) as isize;
+            b.offset = (b.offset + b.dir).rem_euclid(len);
+        }
+    }
+
+    fn draw_ticker(&mut self, t: f64) {
+        // Only paint tape rows (and status). Leave the rest blank from enter —
+        // no full-screen wipe every frame (that caused flicker/jerk).
+        let any_cells = self.ticker_bands.iter().any(|b| !b.cells.is_empty());
+        if !any_cells {
+            self.blank_field();
+            let msg = "fetching quotes…";
+            self.term
+                .span_cells(self.h as isize / 2, 2, self.pal.amber, msg);
+        } else {
+            let draw_w = self.w.saturating_sub(1);
+            let blank = self.pal.blank;
+            for band in &self.ticker_bands {
+                let n = band.cells.len() as isize;
+                if n == 0 {
+                    continue;
+                }
+                let spaces = " ".repeat(draw_w);
+                self.term.span_cells(band.row, 0, blank, &spaces);
+                for x in 0..draw_w {
+                    let idx = (band.offset + x as isize).rem_euclid(n) as usize;
+                    let (ch, style) = band.cells[idx];
+                    self.term.cell(band.row, x as isize, style, ch);
+                }
+            }
+        }
+
+        if self.show_status {
+            let status = self
+                .stock_feed
+                .as_ref()
+                .map(|f| f.snapshot().1)
+                .unwrap_or_else(|| "ticker".into());
+            let n_sym = self
+                .stock_feed
+                .as_ref()
+                .map(|f| f.snapshot().0.len())
+                .unwrap_or(0);
+            let line = format!(
+                " meanwhile · ticker · {status} · {n_sym} on tape · $ rain · q quit "
+            );
+            let max = self.w.saturating_sub(1);
+            let mut display: String = line.chars().take(max).collect();
+            while display.chars().count() < max {
+                display.push(' ');
+            }
+            self.term
+                .span_cells(self.h as isize - 1, 0, self.pal.dim, &display);
+        }
+
+        let (ref msg, until) = self.toast;
+        if !msg.is_empty() && t < until {
+            let shown = format!(" {msg} ");
+            let x = (self.w as isize - shown.chars().count() as isize - 3).max(0);
+            self.term
+                .span_cells(self.h as isize - 1, x, self.pal.dim, &shown);
+        }
+
+        if self.panel_open() {
+            self.draw_panel();
+        }
+        let _ = self.term.present();
     }
 
     fn check_theme(&mut self, t: f64) {
@@ -442,6 +743,12 @@ impl App {
     }
 
     fn tick(&mut self, t: f64, dt: f64) {
+        if self.ticker_mode {
+            if !self.panel_open() && !self.paused {
+                self.tick_ticker(dt);
+            }
+            return;
+        }
         if self.wake.is_some() {
             self.tick_wake(t, dt);
             return;
@@ -477,6 +784,17 @@ impl App {
     }
 
     fn draw(&mut self, t: f64) {
+        if self.ticker_mode {
+            // Pure marquee path — never touches matrix streams/glyphs.
+            let rect = if self.panel_open() {
+                Some(self.compute_panel_rect())
+            } else {
+                None
+            };
+            self.panel_rect = rect;
+            self.draw_ticker(t);
+            return;
+        }
         if let Some(ref w) = self.wake {
             let line = WAKE[w.line];
             let n = (w.chars as usize).min(line.len());
@@ -1284,9 +1602,17 @@ impl App {
                 t,
             );
         } else if b == b'n' {
-            self.spawn_message(t, Some("news"));
+            if self.ticker_mode {
+                self.flash("ticker mode — $ for rain", t);
+            } else {
+                self.spawn_message(t, Some("news"));
+            }
         } else if b == b'o' {
-            self.spawn_message(t, Some("poetic"));
+            if self.ticker_mode {
+                self.flash("ticker mode — $ for rain", t);
+            } else {
+                self.spawn_message(t, Some("poetic"));
+            }
         } else if b == b'f' {
             self.focus = !self.focus;
             self.cfg.focus = self.focus;
@@ -1332,21 +1658,74 @@ impl App {
                 t,
             );
         } else if b == b'+' || b == b'=' {
-            self.cfg.speed = (self.cfg.speed * 1.25).min(4.0);
-            self.flash(&format!("speed {:.2}x", self.cfg.speed), t);
+            if self.ticker_mode {
+                if self.ticker_speed_idx + 1 < TICKER_FRAMES_PER_STEP.len() {
+                    self.ticker_speed_idx += 1;
+                    self.ticker_frame_accum = 0;
+                }
+                self.flash(
+                    &format!(
+                        "ticker {:.0} cells/s · {} frames/step @ 24fps",
+                        self.ticker_cells_per_sec(),
+                        self.ticker_frames_per_step()
+                    ),
+                    t,
+                );
+            } else {
+                self.cfg.speed = (self.cfg.speed * 1.25).min(4.0);
+                self.flash(&format!("speed {:.2}x", self.cfg.speed), t);
+            }
         } else if b == b'-' {
-            self.cfg.speed = (self.cfg.speed / 1.25).max(0.2);
-            self.flash(&format!("speed {:.2}x", self.cfg.speed), t);
+            if self.ticker_mode {
+                if self.ticker_speed_idx > 0 {
+                    self.ticker_speed_idx -= 1;
+                    self.ticker_frame_accum = 0;
+                }
+                self.flash(
+                    &format!(
+                        "ticker {:.0} cells/s · {} frames/step @ 24fps",
+                        self.ticker_cells_per_sec(),
+                        self.ticker_frames_per_step()
+                    ),
+                    t,
+                );
+            } else {
+                self.cfg.speed = (self.cfg.speed / 1.25).max(0.2);
+                self.flash(&format!("speed {:.2}x", self.cfg.speed), t);
+            }
         } else if b == b'r' {
-            self.feed.wake();
-            self.flash("refreshing headlines…", t);
+            if self.ticker_mode {
+                if let Some(ref f) = self.stock_feed {
+                    f.wake();
+                }
+                self.flash("refreshing quotes…", t);
+            } else {
+                self.feed.wake();
+                self.flash("refreshing headlines…", t);
+            }
         } else if b == b's' {
             self.show_status = !self.show_status;
             if !self.show_status {
                 self.clear_row(self.h as isize - 1);
             }
         } else if b == b'd' {
-            self.show_debug = true;
+            if self.ticker_mode {
+                // In ticker mode, d still opens a simple status flash.
+                let status = self
+                    .stock_feed
+                    .as_ref()
+                    .map(|f| f.snapshot().1)
+                    .unwrap_or_else(|| "no feed".into());
+                self.flash(&status, t);
+            } else {
+                self.show_debug = true;
+            }
+        } else if b == b'$' {
+            if self.ticker_mode {
+                self.enter_rain_mode(t);
+            } else {
+                self.enter_ticker_mode(t);
+            }
         } else if b == b'?' {
             self.show_help = true;
         }
@@ -1361,8 +1740,10 @@ impl App {
         self.term.enter(self.cfg.mouse)?;
         // Inherit the active WezTerm (or other) palette now that the TTY is raw.
         self.adopt_terminal_theme(0.0);
-        // Surface feed status early.
-        {
+        if self.ticker_mode {
+            self.enter_ticker_mode(0.0);
+        } else {
+            // Surface feed status early.
             let (_, _, status, _) = self.feed.snapshot();
             if status.contains("poetic only") || status.contains("unreachable") {
                 self.flash(&status, 0.0);
@@ -1397,16 +1778,25 @@ impl App {
                             && m.x0 + (m.text.chars().count() as isize) < self.w as isize - 1
                     });
                     self.streams.retain(|s| s.row < self.h as isize);
+                    self.ticker_bands.clear();
+                    self.ticker_gen = 0; // rebuild tape width
                     self.panel_rect = None;
                     self.term.clear_screen();
+                    if self.ticker_mode {
+                        self.blank_field();
+                    }
                 }
                 if !self.paused {
                     self.tick(t, dt);
                 }
                 self.draw(t);
-                // Ambient pace (~8 fps default). Motion uses real dt, so fps
-                // only controls redraw rate / PTY traffic.
-                let fps = self.cfg.fps.clamp(4.0, 30.0);
+                // Ambient rain uses config fps (~8); ticker is locked to 24 fps
+                // so speed steps are integer frames-per-cell (even cells/sec).
+                let fps = if self.ticker_mode {
+                    TICKER_FPS
+                } else {
+                    self.cfg.fps.clamp(4.0, 30.0)
+                };
                 let frame_budget = 1.0 / fps;
                 let target = t + frame_budget;
                 let timeout = Duration::from_secs_f64((target - monotonic()).max(0.0));

@@ -22,6 +22,8 @@ Glance at it and it's rain; look at it and it's the world.
 - **Poetic** — true things happening right now, for scale and gratitude:
   live counters, tonight's moon phase, where the sun is rising, seasonal
   lines. Every one is true.
+- **Ticker mode** — a separate pure stock marquee (no matrix field). See
+  [Ticker mode](#ticker-mode) below.
 
 **Written in Rust** — a single native binary, no Python runtime, low CPU.
 
@@ -36,8 +38,9 @@ This is a **Rust port and continuation** of the original project:
 
 Notable changes in this fork include the Rust rewrite, RSS-first news
 (no search API required for headlines), broader national feed maps, terminal
-theme inheritance (WezTerm / Starship / OSC / Omarchy), feed diagnostics, and
-performance work aimed at multi-pane terminals like WezTerm.
+theme inheritance (WezTerm / Starship / OSC / Omarchy), feed diagnostics,
+classic stock-ticker mode, and performance work aimed at multi-pane terminals
+like WezTerm.
 
 ## Install
 
@@ -54,8 +57,13 @@ Or build without installing into Cargo's bin dir:
 
 ```sh
 cargo build --release
+./target/release/meanwhile
+# optional:
 ln -sf "$PWD/target/release/meanwhile" ~/.local/bin/meanwhile
 ```
+
+After pulling changes, always rebuild (`cargo build --release` or
+`cargo install --path . --force`) so CLI flags match the source.
 
 Arch users may still find an AUR package for the upstream project
 (`meanwhile-rain`); packaging files under `packaging/` describe a cargo-based
@@ -90,15 +98,42 @@ Add arbitrary feed URLs with `extra_feeds` in the config. Click decodes the
 feed blurb into the rain; an optional [Exa](https://exa.ai) key
 (`EXA_API_KEY`) only upgrades that summary. Pass `--offline` for poetic-only.
 
+## Ticker mode
+
+A **separate full-screen mode**: classic scrolling quotes only — **no**
+katakana, streams, headlines, or poetic lines.
+
+```sh
+# full S&P 500 (~503 names) on the tape
+meanwhile --ticker
+
+# lighter half-universe
+meanwhile --ticker --symbols SP250
+
+# custom Yahoo symbols
+meanwhile --ticker --symbols "AAPL,MSFT,SPY,BTC-USD,FBU.NZ"
+```
+
+| behaviour | detail |
+|-----------|--------|
+| Universe | Default alias **`SP500`** (embedded list). **`SP250`** = first 250 names. Or list symbols explicitly. |
+| Layout | Quotes sorted **A→Z**, partitioned **top→bottom** across rows; each symbol on **exactly one** row. |
+| Motion | All rows step **together** at **24 fps**. Alternate rows scroll **opposite** directions. |
+| Speed (`+` / `-`) | Discrete steps locked to 24 fps (even cells/sec: 1.5, 2, 3, 4, 6, 8, 12, 24). |
+| Data | Yahoo Finance spark batches (no API key). Refresh every **10 minutes**; **`r`** forces a pull. |
+| Session toggle | **`$`** switches rain ↔ ticker for **this run only** (does not rewrite launch mode). |
+| Launch | Plain `meanwhile` → **rain**. `meanwhile --ticker` → tickers. Config `"mode": "ticker"` also starts tickers if set. |
+
 ## Keys
 
 | key | action | key | action |
 |-----|--------|-----|--------|
+| `$` | ticker ↔ rain (session only) | `space` | pause |
 | `click` | **decode a story into the rain** | `shift-click` | open article in browser |
-| `enter` | pick a story to decode (↑/↓ + enter) | `space` | pause |
+| `enter` | pick a story to decode (↑/↓ + enter) | | |
 | `t` | edit topics | `g` | edit places (local intel) |
 | `f` | focus — surface the text | `n` / `o` | a headline / something true |
-| `m` / `p` | toggle news / poetic | `r` | refresh headlines |
+| `m` / `p` | toggle news / poetic | `r` | refresh feeds / quotes |
 | `+` / `-` | speed | `s` / `d` / `?` | status / feed debug / help |
 | `q` | quit | | |
 
@@ -139,12 +174,18 @@ Set `"theme": "matrix"` (or `--theme matrix`) for classic phosphor green.
 | `places` | places for local intel (also: `g` in-app) |
 | `poetic_ratio` | fraction of lines that are poetic |
 | `density`, `speed`, `message_every_seconds` | feel of the rain (density default **0.45**) |
-| `fps` | redraw rate (default **8** — quiet ambient pace; 4–30) |
+| `fps` | rain redraw rate (default **8**; ticker is fixed at **24**) |
 | `focus`, `theme`, `show_source`, `ascii_only` | look |
-| `refresh_minutes` | how often to re-pull feeds |
+| `refresh_minutes` | how often to re-pull news feeds |
 | `extra_feeds` | extra RSS/Atom URLs to always pull |
+| `mode` | `"rain"` (default launch) or `"ticker"` |
+| `tickers` | `SP500`, `SP250`, or explicit Yahoo symbols |
 | `env_files` | optional paths for `EXA_API_KEY` (summaries only) |
 | `mouse` | set `false` to leave the mouse alone |
+
+`$` does **not** persist `mode` — only an explicit config edit or launching
+with a saved `"mode": "ticker"` changes the default launch. Prefer
+`meanwhile --ticker` when you want the tape.
 
 Cache and diagnostics live under `~/.cache/meanwhile/` (`headlines.json`,
 `last-fetch.log`).
@@ -155,10 +196,12 @@ Cache and diagnostics live under `~/.cache/meanwhile/` (`headlines.json`,
 meanwhile [OPTIONS]
 
       --offline          poetic lines only, no news fetch
+      --ticker           pure stock marquee for this run (no matrix rain)
+      --symbols <LIST>   Yahoo symbols / SP500 / SP250 for ticker mode
       --ascii            ASCII glyphs (no katakana)
       --topics <TOPICS>  comma-separated topics, overrides config
       --places <PLACES>  comma-separated places for local intel
-      --speed <SPEED>    speed multiplier
+      --speed <SPEED>    rain speed multiplier
       --theme <THEME>    auto | matrix
   -v, --verbose          log each feed fetch to stderr
       --check-feeds      fetch once, print diagnostics, exit (no TUI)
@@ -184,8 +227,8 @@ meanwhile --check-feeds -v --places "New Zealand"
 - Plain click decodes in-app; **shift-click opens the browser** (handled by
   meanwhile so it works under WezTerm mouse tracking). OSC 8 is still emitted
   as a bonus for terminals that honour it.
-- Defaults are tuned for multi-pane use (~8 fps, modest density); raise
-  `fps` / `density` if you want a denser wall.
+- Help and other popups freeze the field — nothing paints through them.
+- Rain defaults are tuned for multi-pane use (~8 fps, modest density).
 - Every so often — not often — the rain has something to say to you
   directly. If you're impatient, you know whose name to type.
 
@@ -204,18 +247,16 @@ The original Python app was a single ~55 KB stdlib script and already claimed
 only ~1–2% CPU — ambient rain was never a number-crunching problem. The costly
 part of watching it is almost always **the terminal repainting**, not the
 language. This port keeps that load down with a dirty frame buffer, an **8 fps**
-default, and modest stream density.
+rain default, and modest stream density.
 
 **Was the port worth it?** As a pure speed exercise, only a little: same idea,
 more build ceremony, a larger artifact than a `.py` file (Python itself still
 has to exist on the machine for the script path). As a *product* fork — yes:
 one binary with no runtime dependency, RSS-first news without a search API
-key, theme inheritance, and diagnostics that make multi-pane WezTerm use
-pleasant. The interesting scorecard is **ship + evolve**, not shaving 1% CPU
-off drawing characters.
+key, theme inheritance, diagnostics, and a classic ticker mode. The interesting
+scorecard is **ship + evolve**, not shaving 1% CPU off drawing characters.
 
 ## License
 
 MIT — see [LICENSE](LICENSE). Original copyright Tom Davenport; this fork
 continues under the same license.
-

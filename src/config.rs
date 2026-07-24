@@ -49,6 +49,12 @@ pub struct Config {
     /// Extra RSS/Atom feed URLs (always fetched as general news).
     #[serde(default)]
     pub extra_feeds: Vec<String>,
+    /// `"rain"` (default) or `"ticker"` — pure stock marquee, no matrix field.
+    #[serde(default = "default_mode")]
+    pub mode: String,
+    /// Yahoo Finance symbols for ticker mode (e.g. AAPL, SPY, BTC-USD, FBU.NZ).
+    #[serde(default = "default_tickers")]
+    pub tickers: Vec<String>,
     #[serde(default = "default_mouse")]
     pub mouse: bool,
 }
@@ -59,6 +65,16 @@ fn default_mouse() -> bool {
 
 fn default_fps() -> f64 {
     8.0
+}
+
+fn default_mode() -> String {
+    "rain".into()
+}
+
+fn default_tickers() -> Vec<String> {
+    // Alias expanded at runtime to the full S&P 500 list (~500 names).
+    // Use ["SP250"] for the first 250 symbols, or list symbols explicitly.
+    vec!["SP500".into()]
 }
 
 impl Default for Config {
@@ -86,6 +102,8 @@ impl Default for Config {
                 "~/.env".into(),
             ],
             extra_feeds: vec![],
+            mode: "rain".into(),
+            tickers: default_tickers(),
             mouse: true,
         }
     }
@@ -148,6 +166,20 @@ pub fn load_config() -> Config {
                         Value::String("world news".into()),
                         Value::String("technology".into()),
                     ]),
+                );
+            }
+        }
+        // Old short mega-cap ticker list → full S&P 500 universe
+        if let Some(tickers) = obj.get("tickers").and_then(|v| v.as_array()) {
+            let names: Vec<&str> = tickers.iter().filter_map(|v| v.as_str()).collect();
+            let old = [
+                "SPY", "QQQ", "DIA", "IWM", "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META",
+                "TSLA", "BRK-B", "JPM", "V", "XOM", "JNJ", "WMT", "BTC-USD", "ETH-USD",
+            ];
+            if names.len() == old.len() && names.iter().all(|n| old.contains(n)) {
+                obj.insert(
+                    "tickers".into(),
+                    Value::Array(vec![Value::String("SP500".into())]),
                 );
             }
         }
