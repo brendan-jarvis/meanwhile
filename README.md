@@ -56,7 +56,8 @@ Releases are built automatically by GitHub Actions when a version tag
 
 #### Quick install
 
-**Linux (x86_64 / Intel-AMD):**
+<details>
+<summary><strong>Linux (x86_64 / Intel–AMD)</strong></summary>
 
 ```sh
 curl -sL https://github.com/brendan-jarvis/meanwhile/releases/latest/download/meanwhile-x86_64-unknown-linux-gnu.tar.gz \
@@ -65,7 +66,10 @@ chmod +x meanwhile
 ./meanwhile
 ```
 
-**Linux (ARM64 / aarch64):**
+</details>
+
+<details>
+<summary><strong>Linux (ARM64 / aarch64)</strong></summary>
 
 ```sh
 curl -sL https://github.com/brendan-jarvis/meanwhile/releases/latest/download/meanwhile-aarch64-unknown-linux-gnu.tar.gz \
@@ -74,7 +78,10 @@ chmod +x meanwhile
 ./meanwhile
 ```
 
-**macOS (Apple Silicon):**
+</details>
+
+<details>
+<summary><strong>macOS (Apple Silicon)</strong></summary>
 
 ```sh
 curl -sL https://github.com/brendan-jarvis/meanwhile/releases/latest/download/meanwhile-aarch64-apple-darwin.tar.gz \
@@ -83,7 +90,10 @@ chmod +x meanwhile
 ./meanwhile
 ```
 
-**macOS (Intel):**
+</details>
+
+<details>
+<summary><strong>macOS (Intel)</strong></summary>
 
 ```sh
 curl -sL https://github.com/brendan-jarvis/meanwhile/releases/latest/download/meanwhile-x86_64-apple-darwin.tar.gz \
@@ -92,11 +102,27 @@ chmod +x meanwhile
 ./meanwhile
 ```
 
-**Windows:** use [WSL](https://learn.microsoft.com/windows/wsl/) and the
-**Linux x86_64** archive above. Native Windows builds are not published yet
-(the TUI uses Unix terminal APIs).
+</details>
 
-#### Install onto your PATH (optional)
+<details>
+<summary><strong>Windows (via WSL)</strong></summary>
+
+Use [WSL](https://learn.microsoft.com/windows/wsl/) and the **Linux x86_64**
+archive (expand that section above). Native Windows builds are not published
+yet — the TUI uses Unix terminal APIs.
+
+```sh
+# inside WSL:
+curl -sL https://github.com/brendan-jarvis/meanwhile/releases/latest/download/meanwhile-x86_64-unknown-linux-gnu.tar.gz \
+  | tar -xz
+chmod +x meanwhile
+./meanwhile
+```
+
+</details>
+
+<details>
+<summary><strong>Install onto your PATH (optional)</strong></summary>
 
 ```sh
 mkdir -p ~/.local/bin
@@ -104,6 +130,8 @@ mv meanwhile ~/.local/bin/
 # ensure ~/.local/bin is on PATH, then:
 meanwhile
 ```
+
+</details>
 
 #### Assets
 
