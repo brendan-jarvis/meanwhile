@@ -79,18 +79,21 @@ into the stream as a short summary — you never leave the rain:
 
 ![summary](shots/summary.png)
 
-## Theming — including Omarchy, out of the box
+## Theming — inherits your terminal
 
-On [Omarchy](https://omarchy.org), meanwhile adopts your active theme
-automatically: it reads the current theme's colors and rains in *your*
-palette — and when you switch themes, the rain follows within seconds,
-live. No configuration.
+With `"theme": "auto"` (the default), meanwhile rains in *your* palette:
+
+1. **Live terminal colors** via OSC (WezTerm, kitty, foot, …) — whatever
+   scheme is active right now
+2. **WezTerm config** (`color_scheme` / embedded palette table)
+3. **Starship** palette (your prompt colors, e.g. Catppuccin Mocha)
+4. **Omarchy** active theme, when present
+
+Switch your WezTerm scheme or edit the config and the rain follows within
+seconds. Set `"theme": "matrix"` (or `--theme matrix`) to force classic
+green. Plain ANSI is used only when the terminal has no color support.
 
 ![omarchy theming](shots/omarchy-theme.png)
-
-Elsewhere it defaults to classic matrix green (256-color), with a plain
-ANSI fallback. Set `"theme": "matrix"` in the config (or pass
-`--theme matrix`) to force green anywhere.
 
 ## Config
 

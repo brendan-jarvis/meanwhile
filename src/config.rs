@@ -32,7 +32,8 @@ pub struct Config {
     #[serde(default = "default_fps")]
     pub fps: f64,
     pub focus: bool,
-    /// "auto" adopts the active Omarchy theme; "matrix" forces green
+    /// "auto" inherits the terminal / WezTerm / Starship / Omarchy palette;
+    /// "matrix" forces classic green
     pub theme: String,
     /// append the domain after each headline
     pub show_source: bool,

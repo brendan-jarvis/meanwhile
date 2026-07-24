@@ -4,8 +4,8 @@ use crate::poetic::poetic_line;
 use crate::rain::{residue_at, Glyphs, Message, Noise};
 use crate::term::Term;
 use crate::theme::{
-    build_palette, load_omarchy_colors, theme_mtime, OmarchyColors, Palette, GLYPHS_ASCII,
-    GLYPHS_KATA,
+    build_palette, load_auto_theme, query_terminal_theme, theme_sources_mtime, ThemeColors,
+    Palette, GLYPHS_ASCII, GLYPHS_KATA,
 };
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -77,7 +77,7 @@ pub struct App {
     feed: Arc<Newsfeed>,
     basic: bool,
     focus: bool,
-    theme_colors: Option<OmarchyColors>,
+    theme_colors: Option<ThemeColors>,
     theme_mtime: Option<SystemTime>,
     pal: Palette,
     glyphs: Glyphs,
@@ -116,12 +116,13 @@ impl App {
             !term_env.contains("256") && colorterm.is_empty()
         };
         let focus = cfg.focus;
+        // File-based first (WezTerm / Starship / Omarchy); live OSC after enter.
         let theme_colors = if cfg.theme == "auto" {
-            load_omarchy_colors()
+            load_auto_theme()
         } else {
             None
         };
-        let theme_mtime_val = theme_mtime();
+        let theme_mtime_val = theme_sources_mtime();
         let pal = build_palette(basic, focus, theme_colors.as_ref());
         let glyphs = Glyphs::new(if cfg.ascii_only {
             GLYPHS_ASCII
@@ -174,13 +175,18 @@ impl App {
         if self.cfg.theme != "auto" {
             return;
         }
-        let mtime = theme_mtime();
+        let mtime = theme_sources_mtime();
         if mtime == self.theme_mtime {
             return;
         }
-        let new = match load_omarchy_colors() {
+        // Config files changed — reload from disk (no OSC mid-loop: replies
+        // would race with keys/mouse). Live OSC is only used at startup.
+        let new = match load_auto_theme() {
             Some(c) => c,
-            None => return,
+            None => {
+                self.theme_mtime = mtime;
+                return;
+            }
         };
         self.theme_mtime = mtime;
         if Some(&new) == self.theme_colors.as_ref() {
@@ -190,6 +196,34 @@ impl App {
         self.theme_colors = Some(new);
         self.apply_palette();
         self.term.clear_screen();
+        self.flash(&format!("theme: {name}"), t);
+    }
+
+    /// After the TTY is raw, ask the terminal for its real palette (WezTerm etc.).
+    fn adopt_terminal_theme(&mut self, t: f64) {
+        if self.cfg.theme != "auto" {
+            return;
+        }
+        let Some(new) = query_terminal_theme() else {
+            return;
+        };
+        if self
+            .theme_colors
+            .as_ref()
+            .is_some_and(|c| theme_rgb_eq(c, &new))
+        {
+            // Keep the nicer file-based name if colors already match.
+            return;
+        }
+        let name = new.name.clone();
+        let had = self.theme_colors.is_some();
+        self.theme_colors = Some(new);
+        self.apply_palette();
+        // Only full clear when replacing an existing palette mid-session feel;
+        // at startup the screen is already blank from enter().
+        if had {
+            self.term.clear_screen();
+        }
         self.flash(&format!("theme: {name}"), t);
     }
 
@@ -1088,6 +1122,8 @@ impl App {
             libc::signal(libc::SIGWINCH, handle_sigwinch as *const () as usize);
         }
         self.term.enter(self.cfg.mouse)?;
+        // Inherit the active WezTerm (or other) palette now that the TTY is raw.
+        self.adopt_terminal_theme(0.0);
         let mut last = monotonic();
         let mut frame = 0u64;
         // Always leave() on every exit path (including panic unwind via Drop).
@@ -1097,7 +1133,8 @@ impl App {
                 let dt = (t - last).min(0.1);
                 last = t;
                 frame += 1;
-                if frame % 90 == 0 {
+                // ~every 10s at 8 fps — pick up WezTerm/Starship/Omarchy changes
+                if frame % 80 == 0 {
                     self.check_theme(t);
                 }
                 if RESIZED.swap(false, Ordering::SeqCst) {
@@ -1150,6 +1187,16 @@ fn monotonic() -> f64 {
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     let start = START.get_or_init(Instant::now);
     start.elapsed().as_secs_f64()
+}
+
+fn theme_rgb_eq(a: &ThemeColors, b: &ThemeColors) -> bool {
+    a.bg == b.bg
+        && a.fg == b.fg
+        && a.green == b.green
+        && a.bgreen == b.bgreen
+        && a.yellow == b.yellow
+        && a.cyan == b.cyan
+        && a.bwhite == b.bwhite
 }
 
 fn local_offset_secs() -> i64 {
