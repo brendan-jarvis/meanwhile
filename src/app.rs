@@ -1,7 +1,7 @@
 use crate::config::{save_config, Config};
 use crate::news::{fetch_summary, Headline, Newsfeed};
 use crate::poetic::poetic_line;
-use crate::rain::{residue_at, Message, Noise};
+use crate::rain::{residue_at, Glyphs, Message, Noise};
 use crate::term::Term;
 use crate::theme::{
     build_palette, load_omarchy_colors, theme_mtime, OmarchyColors, Palette, GLYPHS_ASCII,
@@ -80,7 +80,7 @@ pub struct App {
     theme_colors: Option<OmarchyColors>,
     theme_mtime: Option<SystemTime>,
     pal: Palette,
-    glyphs: String,
+    glyphs: Glyphs,
     h: usize,
     w: usize,
     streams: Vec<Noise>,
@@ -123,13 +123,15 @@ impl App {
         };
         let theme_mtime_val = theme_mtime();
         let pal = build_palette(basic, focus, theme_colors.as_ref());
-        let glyphs = if cfg.ascii_only {
-            GLYPHS_ASCII.to_string()
+        let glyphs = Glyphs::new(if cfg.ascii_only {
+            GLYPHS_ASCII
         } else {
-            GLYPHS_KATA.to_string()
-        };
+            GLYPHS_KATA
+        });
         let h = term.h;
         let w = term.w;
+        let mut term = term;
+        term.set_styles(pal.sgr.clone());
         Self {
             term,
             cfg,
@@ -186,9 +188,14 @@ impl App {
         }
         let name = new.name.clone();
         self.theme_colors = Some(new);
-        self.pal = build_palette(self.basic, self.focus, self.theme_colors.as_ref());
-        self.term.out("\x1b[2J");
+        self.apply_palette();
+        self.term.clear_screen();
         self.flash(&format!("theme: {name}"), t);
+    }
+
+    fn apply_palette(&mut self) {
+        self.pal = build_palette(self.basic, self.focus, self.theme_colors.as_ref());
+        self.term.set_styles(self.pal.sgr.clone());
     }
 
     fn guard(&self, row: isize, x: isize) -> bool {
@@ -357,13 +364,13 @@ impl App {
         if w.advance {
             if w.line >= WAKE.len() - 1 {
                 self.wake = None;
-                self.term.out("\x1b[2J");
+                self.term.clear_screen();
                 return;
             }
             w.advance = false;
             w.line += 1;
             w.chars = 0.0;
-            self.term.out("\x1b[2J");
+            self.term.clear_screen();
         }
         // re-borrow after possible clear
         let w = self.wake.as_mut().unwrap();
@@ -411,9 +418,9 @@ impl App {
             let line = WAKE[w.line];
             let n = (w.chars as usize).min(line.len());
             let shown = format!("{}█", &line[..n]);
-            let scramble = self.pal.scramble.clone();
-            self.term.span(2, 3, &scramble, &shown, None);
-            let _ = self.term.flush();
+            let scramble = self.pal.scramble;
+            self.term.span_cells(2, 3, scramble, &shown);
+            let _ = self.term.present();
             return;
         }
 
@@ -440,27 +447,32 @@ impl App {
                 }
             }
             self.panel_rect = Some(r);
+        } else {
+            self.panel_rect = None;
         }
 
         if !self.paused {
-            let n = 10.max((self.w * self.h) / 140);
+            // Sparse field sparkle — was /140; lower so we don't thrash the PTY.
+            let n = 6.max((self.w * self.h) / 400);
+            let mut rng = rand::thread_rng();
+            let max_x = self.w.saturating_sub(1).max(1);
             for _ in 0..n {
-                let y = rand::thread_rng().gen_range(0..self.h) as isize;
-                let x = rand::thread_rng().gen_range(0..self.w.saturating_sub(1).max(1)) as isize;
+                let y = rng.gen_range(0..self.h) as isize;
+                let x = rng.gen_range(0..max_x) as isize;
                 if !self.guard(y, x) {
-                    let (esc, ch) = residue_at(y, x, t, &self.glyphs, &self.pal);
-                    self.term.cell(y, x, &esc, &ch);
+                    let (style, ch) = residue_at(y, x, t, &self.glyphs, &self.pal);
+                    self.term.cell(y, x, style, ch);
                 }
             }
-            // draw streams with guard closure
-            let mut i = 0;
-            while i < self.streams.len() {
-                // rebuild guard each time from current spans/panel
-                let h = self.h;
-                let show_status = self.show_status;
-                let panel = self.panel_rect;
-                let spans = self.spans.clone();
-                let guard = |row: isize, x: isize| {
+
+            // Shared guard snapshot for this frame (one small clone, not per stream).
+            let h = self.h;
+            let show_status = self.show_status;
+            let panel = self.panel_rect;
+            let spans = self.spans.clone();
+
+            for s in &mut self.streams {
+                let guard_fn = |row: isize, x: isize| -> bool {
                     if row == h as isize - 1 && show_status {
                         return true;
                     }
@@ -478,8 +490,13 @@ impl App {
                     }
                     false
                 };
-                self.streams[i].draw(&mut self.term, t, &self.pal, &self.glyphs, guard);
-                i += 1;
+                s.draw(
+                    &mut self.term,
+                    t,
+                    &self.pal,
+                    &self.glyphs,
+                    guard_fn,
+                );
             }
             self.streams.retain(|s| !s.dead(self.w));
 
@@ -496,9 +513,9 @@ impl App {
                     use std::time::UNIX_EPOCH;
                     let secs = ts.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                     let day_secs = (secs as i64 + local_offset_secs()) as u64 % 86400;
-                    let h = day_secs / 3600;
-                    let m = (day_secs % 3600) / 60;
-                    format!(" · refreshed {h:02}:{m:02}")
+                    let hh = day_secs / 3600;
+                    let mm = (day_secs % 3600) / 60;
+                    format!(" · refreshed {hh:02}:{mm:02}")
                 })
                 .unwrap_or_default();
             let places: Vec<&str> = self
@@ -520,23 +537,24 @@ impl App {
             while display.chars().count() < self.w.saturating_sub(1) {
                 display.push(' ');
             }
-            let dim = self.pal.dim.clone();
+            let dim = self.pal.dim;
             self.term
-                .span(self.h as isize - 1, 0, &dim, &display, None);
+                .span_cells(self.h as isize - 1, 0, dim, &display);
         }
 
         let (ref msg, until) = self.toast;
         if !msg.is_empty() && t < until {
-            let dim = self.pal.dim.clone();
+            let dim = self.pal.dim;
             let shown = format!(" {msg} ");
             let x = (self.w as isize - shown.chars().count() as isize - 3).max(0);
-            self.term.span(self.h as isize - 1, x, &dim, &shown, None);
+            self.term
+                .span_cells(self.h as isize - 1, x, dim, &shown);
         }
 
         if self.show_help || self.editor.is_some() || self.picker.is_some() {
             self.draw_panel();
         }
-        let _ = self.term.flush();
+        let _ = self.term.present();
     }
 
     fn open_summary(&mut self, link: Link, t: f64) {
@@ -722,40 +740,41 @@ impl App {
             None => return,
         };
         let bw = (x1 - x0 + 1) as usize;
-        let blank = self.pal.blank.clone();
+        let blank = self.pal.blank;
+        let spaces = " ".repeat(bw);
         for i in 0..=(y1 - y0) {
-            self.term
-                .span(y0 + i, x0, &blank, &" ".repeat(bw), None);
+            self.term.span_cells(y0 + i, x0, blank, &spaces);
         }
         let accent = if let Some(ref ed) = self.editor {
             if ed.kind == "places" {
-                self.pal.local.clone()
+                self.pal.local
             } else {
-                self.pal.poetic.clone()
+                self.pal.poetic
             }
         } else {
-            self.pal.news.clone()
+            self.pal.news
         };
-        let dim = self.pal.dim.clone();
+        let dim = self.pal.dim;
         let lines = self.panel_lines();
         for (i, s) in lines.iter().enumerate() {
             let attr = if i == 0 || s.trim_start().starts_with('▸') {
-                &accent
+                accent
             } else {
-                &dim
+                dim
             };
             let clipped: String = s.chars().take(bw.saturating_sub(3)).collect();
             self.term
-                .span(y0 + 1 + i as isize, x0 + 2, attr, &clipped, None);
+                .span_cells(y0 + 1 + i as isize, x0 + 2, attr, &clipped);
         }
     }
 
     fn clear_rect(&mut self, rect: (isize, isize, isize, isize)) {
         let (y0, x0, y1, x1) = rect;
-        let blank = self.pal.blank.clone();
+        let blank = self.pal.blank;
         let width = (x1 - x0 + 1) as usize;
+        let spaces = " ".repeat(width);
         for y in y0..=y1 {
-            self.term.span(y, x0, &blank, &" ".repeat(width), None);
+            self.term.span_cells(y, x0, blank, &spaces);
         }
     }
 
@@ -764,7 +783,7 @@ impl App {
         self.show_help = false;
         self.picker = None;
         self.panel_rect = None;
-        self.term.out("\x1b[2J");
+        self.term.clear_screen();
     }
 
     fn flash(&mut self, msg: &str, t: f64) {
@@ -772,9 +791,9 @@ impl App {
     }
 
     fn clear_row(&mut self, row: isize) {
-        let blank = self.pal.blank.clone();
-        self.term
-            .span(row, 0, &blank, &" ".repeat(self.w.saturating_sub(1)), None);
+        let blank = self.pal.blank;
+        let spaces = " ".repeat(self.w.saturating_sub(1));
+        self.term.span_cells(row, 0, blank, &spaces);
     }
 
     fn handle_bytes(&mut self, data: &[u8], t: f64) -> bool {
@@ -811,7 +830,7 @@ impl App {
 
     fn handle_key(&mut self, b: u8, is_seq: bool, t: f64) -> bool {
         if self.wake.is_some() {
-            if b == b'q' || b == 27 {
+            if b == b'q' || b == 27 || b == 3 {
                 return false;
             }
             return true;
@@ -956,13 +975,18 @@ impl App {
         }
 
         if self.show_help {
-            if b == b'q' {
+            if b == b'q' || b == 3 {
                 return false;
             }
             self.close_panel();
             return true;
         }
 
+        // Ctrl-C (ISIG off) or Esc with no story open → clean quit so mouse
+        // reporting is disabled and the shell doesn't eat leftover CSI clicks.
+        if b == 3 {
+            return false;
+        }
         if b == 27 {
             if self
                 .messages
@@ -994,7 +1018,7 @@ impl App {
         } else if b == b'f' {
             self.focus = !self.focus;
             self.cfg.focus = self.focus;
-            self.pal = build_palette(self.basic, self.focus, self.theme_colors.as_ref());
+            self.apply_palette();
             save_config(&self.cfg);
             self.flash(
                 if self.focus {
@@ -1056,46 +1080,52 @@ impl App {
     }
 
     pub fn run(&mut self) -> std::io::Result<()> {
-        // SIGWINCH
+        // SIGWINCH (SIGINT/TERM handled inside Term::enter for mouse cleanup)
         unsafe {
             libc::signal(libc::SIGWINCH, handle_sigwinch as *const () as usize);
         }
         self.term.enter(self.cfg.mouse)?;
         let mut last = monotonic();
         let mut frame = 0u64;
-        loop {
-            let t = monotonic();
-            let dt = (t - last).min(0.1);
-            last = t;
-            frame += 1;
-            if frame % 90 == 0 {
-                self.check_theme(t);
+        // Always leave() on every exit path (including panic unwind via Drop).
+        let result = (|| {
+            loop {
+                let t = monotonic();
+                let dt = (t - last).min(0.1);
+                last = t;
+                frame += 1;
+                if frame % 90 == 0 {
+                    self.check_theme(t);
+                }
+                if RESIZED.swap(false, Ordering::SeqCst) {
+                    self.term.resize();
+                    self.h = self.term.h;
+                    self.w = self.term.w;
+                    self.messages.retain(|m| {
+                        m.row < self.h as isize - 1
+                            && m.x0 + (m.text.chars().count() as isize) < self.w as isize - 1
+                    });
+                    self.streams.retain(|s| s.row < self.h as isize);
+                    self.panel_rect = None;
+                    self.term.clear_screen();
+                }
+                if !self.paused {
+                    self.tick(t, dt);
+                }
+                self.draw(t);
+                // 20 fps is plenty for ambient rain; keeps WezTerm (and sibling
+                // panes) from drowning in escape sequences.
+                let target = t + 1.0 / 20.0;
+                let timeout = Duration::from_secs_f64((target - monotonic()).max(0.0));
+                let data = self.term.read(timeout);
+                if !data.is_empty() && !self.handle_bytes(&data, t) {
+                    break;
+                }
             }
-            if RESIZED.swap(false, Ordering::SeqCst) {
-                self.term.resize();
-                self.h = self.term.h;
-                self.w = self.term.w;
-                self.messages.retain(|m| {
-                    m.row < self.h as isize - 1
-                        && m.x0 + (m.text.chars().count() as isize) < self.w as isize - 1
-                });
-                self.streams.retain(|s| s.row < self.h as isize);
-                self.panel_rect = None;
-                self.term.out("\x1b[2J");
-            }
-            if !self.paused {
-                self.tick(t, dt);
-            }
-            self.draw(t);
-            let target = t + 1.0 / 30.0;
-            let timeout = Duration::from_secs_f64((target - monotonic()).max(0.0));
-            let data = self.term.read(timeout);
-            if !data.is_empty() && !self.handle_bytes(&data, t) {
-                break;
-            }
-        }
+            Ok(())
+        })();
         self.term.leave();
-        Ok(())
+        result
     }
 }
 
