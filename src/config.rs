@@ -28,6 +28,9 @@ pub struct Config {
     pub message_every_seconds: f64,
     pub density: f64,
     pub speed: f64,
+    /// Target frames per second (ambient rain; 12 feels like classic animation).
+    #[serde(default = "default_fps")]
+    pub fps: f64,
     pub focus: bool,
     /// "auto" adopts the active Omarchy theme; "matrix" forces green
     pub theme: String,
@@ -41,6 +44,10 @@ pub struct Config {
 
 fn default_mouse() -> bool {
     true
+}
+
+fn default_fps() -> f64 {
+    12.0
 }
 
 impl Default for Config {
@@ -58,6 +65,7 @@ impl Default for Config {
             message_every_seconds: 1.8,
             density: 0.75,
             speed: 1.0,
+            fps: 12.0,
             focus: false,
             theme: "auto".into(),
             show_source: false,

@@ -132,26 +132,27 @@ impl Noise {
         self.last_head = hi;
         self.last_tail = self.last_tail.max(tail);
 
-        // Full trail redraw only when the head advanced; otherwise just
-        // re-shimmer the bright head + a couple of cells (visual life without
-        // rewriting ~20 cells × N streams every frame).
+        // When the head advances, paint the whole trail once. Between advances
+        // only the bright head cell updates — at ~12 fps that still reads as
+        // living rain without rewriting every stream body every frame.
         self.shimmer_phase = self.shimmer_phase.wrapping_add(1);
-        let shimmer_all = head_moved || self.shimmer_phase % 3 == 0;
-        let redraw_len = if shimmer_all {
+        let redraw_len = if head_moved {
             self.length
+        } else if self.shimmer_phase % 4 == 0 {
+            1 // head sparkle only
         } else {
-            3.min(self.length) // head + short sparkle
+            0
         };
 
+        // Quantize time so glyph salt holds steady for a few frames (dirty buffer
+        // then sees identical cells and emits nothing).
+        let salt_t = (t * 0.6) as i32;
         for d in 0..redraw_len {
             let x = hi - d;
             if guard(self.row, x as isize) {
                 continue;
             }
-            // Slower salt change → fewer dirty cells in the frame buffer.
-            let salt = (t * 1.2
-                + ((x * 7 + self.row as i32 * 13) % 23) as f64 / 23.0)
-                as i32;
+            let salt = salt_t + ((x * 7 + self.row as i32 * 13) % 23);
             let ch = glyph_at(self.row, x as isize, salt, glyphs);
             if d == 0 {
                 term.cell(self.row, x as isize, pal.head, ch);
@@ -180,6 +181,10 @@ pub struct Message {
     erase: f64,
     pub dwell: f64,
     pub done: bool,
+    /// Avoid re-emitting OSC 8 hyperlinks every frame while dwelling.
+    link_painted: bool,
+    /// Last integer reveal/erase head so we only repaint when it advances.
+    last_drawn_head: i32,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -221,6 +226,8 @@ impl Message {
             erase: 0.0,
             dwell: 4.0 + 0.055 * text_len as f64,
             done: false,
+            link_painted: false,
+            last_drawn_head: i32::MIN,
         }
     }
 
@@ -261,52 +268,48 @@ impl Message {
         self.phase == Phase::Erase
     }
 
-    pub fn draw(&self, term: &mut Term, t: f64, pal: &Palette, glyphs: &Glyphs) {
+    pub fn draw(&mut self, term: &mut Term, t: f64, pal: &Palette, glyphs: &Glyphs) {
         let attr = match self.kind.as_str() {
             "news" => pal.news,
             "local" => pal.local,
             "summary" => pal.reader,
             _ => pal.poetic,
         };
-        // SGR string for hyperlink immediate path (owned so we can mutably
-        // borrow term afterward).
-        let attr_sgr = term
-            .styles()
-            .get(attr as usize)
-            .cloned()
-            .unwrap_or_else(|| "\x1b[0m".into());
         let chars: Vec<char> = self.text.chars().collect();
         let n = chars.len() as i32;
+        // Quantized salt so scramble cells stay dirty less often.
+        let salt = (t * 4.0) as i32;
 
         match self.phase {
             Phase::Reveal => {
-                let locked = (self.head as i32 - SCRAMBLE).clamp(0, n);
+                let head_i = self.head as i32;
+                self.last_drawn_head = head_i;
+                self.link_painted = false;
+
+                let locked = (head_i - SCRAMBLE).clamp(0, n);
                 if locked > 0 {
                     let text: String = chars[..locked as usize].iter().collect();
-                    let shown = format!(" {text}");
-                    if self.url.is_some() {
-                        // Need OSC 8 — immediate write so click works.
-                        term.span_immediate(
-                            self.row,
-                            self.x0 - 1,
-                            &attr_sgr,
-                            &shown,
-                            self.url.as_deref(),
-                        );
-                    } else {
-                        term.span_cells(self.row, self.x0 - 1, attr, &shown);
-                    }
+                    // Buffer path (deduped). OSC 8 applied once we enter dwell.
+                    term.span_cells(self.row, self.x0 - 1, attr, &format!(" {text}"));
                 }
                 let start = locked.max(0);
-                let end = (self.head as i32).min(n);
+                let end = head_i.min(n);
                 for i in start..end {
-                    let g = glyph_at(self.row, self.x0 + i as isize, (t * 8.0) as i32, glyphs);
+                    let g = glyph_at(self.row, self.x0 + i as isize, salt, glyphs);
                     term.cell(self.row, self.x0 + i as isize, pal.scramble, g);
                 }
             }
             Phase::Dwell => {
                 let shown = format!(" {} ", self.text);
-                if self.url.is_some() {
+                // Frame-buffer paint (stable → present() no-ops after first frame).
+                term.span_cells(self.row, self.x0 - 1, attr, &shown);
+                // OSC 8 once so shift-click still opens the article.
+                if self.url.is_some() && !self.link_painted {
+                    let attr_sgr = term
+                        .styles()
+                        .get(attr as usize)
+                        .cloned()
+                        .unwrap_or_else(|| "\x1b[0m".into());
                     term.span_immediate(
                         self.row,
                         self.x0 - 1,
@@ -314,39 +317,36 @@ impl Message {
                         &shown,
                         self.url.as_deref(),
                     );
-                } else {
-                    term.span_cells(self.row, self.x0 - 1, attr, &shown);
+                    self.link_painted = true;
                 }
             }
             Phase::Erase => {
-                let gone = (self.erase as i32 - SCRAMBLE).clamp(0, n);
+                self.link_painted = false;
+                let erase_i = self.erase as i32;
+                self.last_drawn_head = erase_i;
+
+                let gone = (erase_i - SCRAMBLE).clamp(0, n);
                 let end_x = self.x0 + gone as isize + if gone == n { 2 } else { 0 };
                 for x in (self.x0 - 1)..end_x {
                     let (style, ch) = residue_at(self.row, x, t, glyphs, pal);
                     term.cell(self.row, x, style, ch);
                 }
                 let start = gone.max(0);
-                let end = (self.erase as i32).min(n);
+                let end = erase_i.min(n);
                 let trail_style = *pal.trail.last().unwrap_or(&pal.dim);
                 for i in start..end {
-                    let g = glyph_at(self.row, self.x0 + i as isize, (t * 8.0) as i32, glyphs);
+                    let g = glyph_at(self.row, self.x0 + i as isize, salt, glyphs);
                     term.cell(self.row, self.x0 + i as isize, trail_style, g);
                 }
-                if (self.erase as i32) < n {
-                    let start = (self.erase as i32).max(0) as usize;
+                if erase_i < n {
+                    let start = erase_i.max(0) as usize;
                     let rest: String = chars[start..].iter().collect();
-                    let shown = format!("{rest} ");
-                    if self.url.is_some() {
-                        term.span_immediate(
-                            self.row,
-                            self.x0 + start as isize,
-                            &attr_sgr,
-                            &shown,
-                            self.url.as_deref(),
-                        );
-                    } else {
-                        term.span_cells(self.row, self.x0 + start as isize, attr, &shown);
-                    }
+                    term.span_cells(
+                        self.row,
+                        self.x0 + start as isize,
+                        attr,
+                        &format!("{rest} "),
+                    );
                 }
             }
         }

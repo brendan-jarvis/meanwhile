@@ -395,8 +395,12 @@ impl App {
             return;
         }
         let mult = self.cfg.speed;
-        let target = 8.max((self.h as f64 * self.cfg.density * 1.8) as usize);
-        while self.streams.len() < target && rand::thread_rng().gen::<f64>() < 0.4 {
+        // Fewer concurrent streams on large panes — density still scales, but
+        // hard-cap so a full-screen split doesn't spawn 60+ writers.
+        let target = 6
+            .max((self.h as f64 * self.cfg.density * 1.15) as usize)
+            .min(28);
+        while self.streams.len() < target && rand::thread_rng().gen::<f64>() < 0.35 {
             let eraser = rand::thread_rng().gen::<f64>() < 0.22;
             self.streams.push(Noise::new(self.h, self.w, eraser));
         }
@@ -452,8 +456,8 @@ impl App {
         }
 
         if !self.paused {
-            // Sparse field sparkle — was /140; lower so we don't thrash the PTY.
-            let n = 6.max((self.w * self.h) / 400);
+            // Very sparse settled-field sparkle (a handful of cells per frame).
+            let n = 3.max((self.w * self.h) / 1200).min(12);
             let mut rng = rand::thread_rng();
             let max_x = self.w.saturating_sub(1).max(1);
             for _ in 0..n {
@@ -500,7 +504,7 @@ impl App {
             }
             self.streams.retain(|s| !s.dead(self.w));
 
-            for m in &self.messages {
+            for m in &mut self.messages {
                 m.draw(&mut self.term, t, &self.pal, &self.glyphs);
             }
             self.messages.retain(|m| !m.done);
@@ -1113,13 +1117,22 @@ impl App {
                     self.tick(t, dt);
                 }
                 self.draw(t);
-                // 20 fps is plenty for ambient rain; keeps WezTerm (and sibling
-                // panes) from drowning in escape sequences.
-                let target = t + 1.0 / 20.0;
+                // Classic animation pace (~12 fps default). Motion is integrated
+                // with real dt, so lowering fps only softens the redraw rate.
+                let fps = self.cfg.fps.clamp(4.0, 30.0);
+                let frame_budget = 1.0 / fps;
+                let target = t + frame_budget;
                 let timeout = Duration::from_secs_f64((target - monotonic()).max(0.0));
                 let data = self.term.read(timeout);
                 if !data.is_empty() && !self.handle_bytes(&data, t) {
                     break;
+                }
+                // If present() ran long (busy terminal), yield extra so we don't
+                // stack frames and flood the PTY further.
+                let overshoot = monotonic() - target;
+                if overshoot > 0.0 {
+                    let extra = Duration::from_secs_f64((overshoot * 0.5).min(0.1));
+                    let _ = self.term.read(extra);
                 }
             }
             Ok(())

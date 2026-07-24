@@ -309,13 +309,29 @@ impl Term {
     }
 
     /// Emit only changed cells, wrapped in a synchronized-update pair when supported.
+    /// If nothing changed and there are no immediate writes, this is a pure no-op.
     pub fn present(&mut self) -> io::Result<()> {
+        let force = self.force;
+        self.force = false;
+        let has_immediate = !self.immediate.is_empty();
+
+        // Fast path: no force, no overlays — scan for any dirty cell first.
+        if !force && !has_immediate {
+            let mut dirty = false;
+            for (c, p) in self.cur.iter().zip(self.prev.iter()) {
+                if c != p {
+                    dirty = true;
+                    break;
+                }
+            }
+            if !dirty {
+                return Ok(());
+            }
+        }
+
         self.out.clear();
         // Begin synchronized update (WezTerm, kitty, foot, ghostty, …)
         self.out.extend_from_slice(b"\x1b[?2026h");
-
-        let force = self.force;
-        self.force = false;
 
         let h = self.h;
         let dw = self.draw_w;
@@ -372,12 +388,10 @@ impl Term {
             self.immediate.clear();
         }
 
-        if self.out.len() > 8 {
-            // more than just the sync pair
-            let mut stdout = io::stdout().lock();
-            stdout.write_all(&self.out)?;
-            stdout.flush()?;
-        }
+        // Always more than the empty sync pair if we got here with work to do.
+        let mut stdout = io::stdout().lock();
+        stdout.write_all(&self.out)?;
+        stdout.flush()?;
         Ok(())
     }
 
