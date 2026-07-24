@@ -36,11 +36,37 @@ This is a **Rust port and continuation** of the original project:
   Credit where it's due: a lovely ambient concept, and a joy to reimplement.
 - **This repository:** [brendan-jarvis/meanwhile](https://github.com/brendan-jarvis/meanwhile)
 
-Notable changes in this fork include the Rust rewrite, RSS-first news
-(no search API required for headlines), broader national feed maps, terminal
-theme inheritance (WezTerm / Starship / OSC / Omarchy), feed diagnostics,
-classic stock-ticker mode, and performance work aimed at multi-pane terminals
-like WezTerm.
+<details>
+<summary><strong>What’s different in this fork</strong></summary>
+
+Compared with the original Python prototype:
+
+- **Rust rewrite** — single native binary, no Python runtime; lower steady-state
+  CPU for long-running ambient use (especially multi-pane terminals).
+- **RSS/Atom-first news** — headlines from open feeds (plus a few free JSON
+  APIs). No search API key required for the rain itself; optional Exa remains
+  available only for richer click-to-summarize when configured.
+- **Broader place → national feed maps** — more outlets per country/region
+  (e.g. RNZ/Stuff, BBC packs, NHK, CBC, …) and Hacker News top-of-day.
+- **Feed diagnostics** — `--check-feeds` / verbose fetch logging so broken or
+  blocked sources are debuggable.
+- **Terminal theme inheritance** — pulls colours from WezTerm, Starship, OSC,
+  and Omarchy-style environments instead of a fixed matrix palette only.
+- **Pure ticker mode** — `$` / `--ticker`: full-screen S&P 500 marquee with no
+  matrix field; session-only toggle (does not stick config on launch).
+- **Input / mouse hardening** — cleaner exit from raw mode and mouse tracking;
+  shift-click opens the article URL in the browser even when OSC-8 is flaky.
+- **Modal occlusion** — help and other panels paint over a frozen rain field
+  so glyphs don’t draw through the UI.
+- **Performance path** — dirty frame buffer, lower default density/fps options,
+  less full-screen redraw work for WezTerm splits and similar PTYs.
+- **Prebuilt GitHub Releases** — Linux and macOS archives so people can run
+  without a local `cargo build` (Windows via WSL).
+
+The original AUR package name (`meanwhile-rain`) and the core ambient idea —
+news and poetic lines in horizontal matrix rain — remain the same lineage.
+
+</details>
 
 ## Install
 
