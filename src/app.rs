@@ -72,6 +72,9 @@ struct Article {
     domain: String,
     summary: String,
     url: String,
+    /// Where the user clicked / the headline sat — summary expands from here.
+    origin_row: Option<isize>,
+    origin_x0: Option<isize>,
 }
 
 pub struct App {
@@ -618,7 +621,7 @@ impl App {
         let _ = self.term.present();
     }
 
-    fn open_summary(&mut self, link: Link, t: f64) {
+    fn open_summary(&mut self, link: Link, t: f64, origin: Option<(isize, isize)>) {
         self.flash(
             &format!("decoding {}…", if link.domain.is_empty() { "story" } else { &link.domain }),
             t,
@@ -631,6 +634,10 @@ impl App {
         let text = link.text.clone();
         let domain = link.domain.clone();
         let feed_summary = link.summary.clone();
+        let (origin_row, origin_x0) = match origin {
+            Some((r, x)) => (Some(r), Some(x)),
+            None => (None, None),
+        };
         thread::Builder::new()
             .name("summary".into())
             .spawn(move || {
@@ -648,6 +655,8 @@ impl App {
                         domain,
                         summary,
                         url,
+                        origin_row,
+                        origin_x0,
                     },
                 ));
             })
@@ -668,28 +677,85 @@ impl App {
         for s in &lines {
             block.push((s.to_string(), "summary".into()));
         }
-        let k = block.len();
-        let taken: std::collections::HashSet<isize> =
-            self.messages.iter().map(|m| m.row).collect();
-        let mut r0: Option<isize> = None;
-        for _ in 0..30 {
-            let max_r = 1.max(self.h as isize - 2 - k as isize);
-            let cand = rand::thread_rng().gen_range(1..=max_r.max(1));
-            if (0..k).all(|i| !taken.contains(&(cand + i as isize))) {
-                r0 = Some(cand);
-                break;
+        let k = block.len() as isize;
+        if k <= 0 {
+            return;
+        }
+
+        // Expand out of the clicked headline (or the on-screen message for that URL).
+        let origin_row = art
+            .origin_row
+            .or_else(|| {
+                self.messages
+                    .iter()
+                    .find(|m| m.url.as_ref() == Some(&art.url))
+                    .map(|m| m.row)
+            })
+            .unwrap_or(1);
+        let origin_x0 = art
+            .origin_x0
+            .or_else(|| {
+                self.messages
+                    .iter()
+                    .find(|m| m.url.as_ref() == Some(&art.url))
+                    .map(|m| m.x0)
+            })
+            .unwrap_or(2);
+
+        // Keep title on the origin row; body drops below. If it would run off
+        // the bottom (status row / edge), slide the whole block up.
+        let top_min = 1isize;
+        let bottom_max = (self.h as isize - 2).max(top_min); // leave last row free
+        let mut r0 = origin_row.clamp(top_min, bottom_max);
+        let overflow = (r0 + k - 1) - bottom_max;
+        if overflow > 0 {
+            r0 = (r0 - overflow).max(top_min);
+        }
+        // If the block is taller than the screen, pin to top and clip is already
+        // handled by take(6); still clamp.
+        if r0 + k - 1 > bottom_max {
+            r0 = top_min;
+        }
+
+        let max_x = 1.max(self.w as isize - width as isize - 2);
+        let x0 = origin_x0.clamp(1, max_x);
+
+        // Clear anything already sitting on the rows we are about to occupy
+        // (including the original headline), so the story can grow in place.
+        let block_rows: std::collections::HashSet<isize> =
+            (r0..r0 + k).collect();
+        self.messages
+            .retain(|m| !block_rows.contains(&m.row));
+
+        // Heal the field: if we bumped the block up away from the click, or
+        // the origin row is no longer the title row, fill vacated rows with
+        // residue glyphs so the rain doesn't leave a blank hole.
+        let heal_lo = r0.min(origin_row);
+        let heal_hi = (r0 + k - 1).max(origin_row);
+        for row in heal_lo..=heal_hi {
+            if block_rows.contains(&row) {
+                continue;
+            }
+            self.fill_row_residue(row, t);
+        }
+        // Also heal a couple of rows immediately below a bottom-clamped block
+        // (where the body would have overflowed).
+        if overflow > 0 {
+            for row in (r0 + k)..=(r0 + k - 1 + overflow).min(bottom_max) {
+                if !block_rows.contains(&row) {
+                    self.fill_row_residue(row, t);
+                }
             }
         }
-        let r0 = r0.unwrap_or_else(|| {
-            self.messages
-                .retain(|m| !(1 <= m.row && m.row < 1 + k as isize));
-            1
-        });
-        let x0 = 2.max((self.w as isize - width as isize) / 2 + rand::thread_rng().gen_range(-6..=6));
+
         self.block_seq += 1;
         let group = self.block_seq;
         let dwell = 10.0 + 0.03 * art.summary.len() as f64;
         for (i, (text, kind)) in block.into_iter().enumerate() {
+            let row = r0 + i as isize;
+            if row > bottom_max {
+                break;
+            }
             let url = if kind == "news" {
                 Some(art.url.clone())
             } else {
@@ -699,16 +765,29 @@ impl App {
                 text,
                 kind,
                 url,
-                r0 + i as isize,
+                row,
                 self.w,
                 t,
                 Some(x0),
-                0.35 * i as f64,
+                0.28 * i as f64,
             );
             m.domain = art.domain.clone();
             m.group = Some(group);
             m.dwell = dwell;
             self.messages.push(m);
+        }
+    }
+
+    /// Paint a full row of settled code so vacated space after a summary
+    /// bump doesn't sit blank.
+    fn fill_row_residue(&mut self, row: isize, t: f64) {
+        if row < 0 || row as usize >= self.h {
+            return;
+        }
+        let max_x = self.w.saturating_sub(1);
+        for x in 0..max_x {
+            let (style, ch) = residue_at(row, x as isize, t, &self.glyphs, &self.pal);
+            self.term.cell(row, x as isize, style, ch);
         }
     }
 
@@ -735,13 +814,14 @@ impl App {
                         .iter()
                         .find(|l| l.url == *url)
                         .and_then(|l| l.summary.clone());
+                    let origin = Some((m.row, m.x0));
                     let link = Link {
                         text: m.text.clone(),
                         url: url.clone(),
                         domain: m.domain.clone(),
                         summary,
                     };
-                    self.open_summary(link, t);
+                    self.open_summary(link, t, origin);
                     return;
                 }
             }
@@ -959,24 +1039,36 @@ impl App {
             }
             if (b == 13 || b == 10) && nlinks > 0 {
                 let sel = self.picker.as_ref().unwrap().sel;
+                let url = self.shown_links[sel].url.clone();
+                let origin = self
+                    .messages
+                    .iter()
+                    .find(|m| m.url.as_ref() == Some(&url))
+                    .map(|m| (m.row, m.x0));
                 let link = Link {
                     text: self.shown_links[sel].text.clone(),
-                    url: self.shown_links[sel].url.clone(),
+                    url,
                     domain: self.shown_links[sel].domain.clone(),
                     summary: self.shown_links[sel].summary.clone(),
                 };
-                self.open_summary(link, t);
+                self.open_summary(link, t, origin);
                 self.close_panel();
             } else if (0x31..=0x39).contains(&b) {
                 let idx = (b - 0x30) as usize;
                 if idx <= nlinks && idx >= 1 {
+                    let url = self.shown_links[idx - 1].url.clone();
+                    let origin = self
+                        .messages
+                        .iter()
+                        .find(|m| m.url.as_ref() == Some(&url))
+                        .map(|m| (m.row, m.x0));
                     let link = Link {
                         text: self.shown_links[idx - 1].text.clone(),
-                        url: self.shown_links[idx - 1].url.clone(),
+                        url,
                         domain: self.shown_links[idx - 1].domain.clone(),
                         summary: self.shown_links[idx - 1].summary.clone(),
                     };
-                    self.open_summary(link, t);
+                    self.open_summary(link, t, origin);
                     self.close_panel();
                 } else {
                     self.close_panel();
