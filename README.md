@@ -13,49 +13,63 @@ In *The Matrix*, the operators stopped seeing code and started seeing the
 world through it. That's the idea: an ambient screen you can actually read.
 Glance at it and it's rain; look at it and it's the world.
 
-- **News** — live headlines, narrowed by your topics, decoded into the
-  stream. **Click a headline and its story decodes into the rain** as a
-  short summary; shift-click opens the article in your browser (headlines
-  are real OSC 8 hyperlinks).
-- **Local intel** — tune to any towns or regions and read what is
-  happening there, down to village-notice level.
-- **Poetic** — true things happening right now, for scale and gratitude,
-  drawn from a growing set of veins: the sky, the sea, deep time, the body,
-  creatures, other people. Live counters (people born since you opened the
-  window, what Voyager 1 did while you watched), tonight's actual moon phase,
-  where the sun is rising at this second, what the season is doing at the
-  poles. Every line is true, and more are finding their way in.
+- **News** — headlines from ordinary **RSS/Atom** feeds (and a couple of free
+  public JSON APIs), matched to your topics and places. **Click a headline**
+  and its story decodes into the rain as a short blurb; **shift-click** opens
+  the article in your browser.
+- **Local intel** — tune places (`g`) such as New Zealand, UK, or Japan and
+  read national/regional coverage from open feeds (RNZ, Stuff, BBC, NHK, …).
+- **Poetic** — true things happening right now, for scale and gratitude:
+  live counters, tonight's moon phase, where the sun is rising, seasonal
+  lines. Every one is true.
 
-Written in Rust. One binary. Runs anywhere a modern terminal exists.
+**Written in Rust** — a single native binary, no Python runtime, low CPU.
+
+## This fork
+
+This is a **Rust port and continuation** of the original project:
+
+- **Original idea & Python prototype:** [Tom Davenport](https://github.com/tomdavenport) —
+  [tomdavenport/meanwhile](https://github.com/tomdavenport/meanwhile).  
+  Credit where it's due: a lovely ambient concept, and a joy to reimplement.
+- **This repository:** [brendan-jarvis/meanwhile](https://github.com/brendan-jarvis/meanwhile)
+
+Notable changes in this fork include the Rust rewrite, RSS-first news
+(no search API required for headlines), broader national feed maps, terminal
+theme inheritance (WezTerm / Starship / OSC / Omarchy), feed diagnostics, and
+performance work aimed at multi-pane terminals like WezTerm.
 
 ## Install
 
-From source (Rust 1.70+):
+Rust 1.70+ (edition 2021):
 
 ```sh
-git clone https://github.com/tomdavenport/meanwhile.git
+git clone https://github.com/brendan-jarvis/meanwhile.git
 cd meanwhile
 cargo install --path .
 meanwhile
 ```
 
-Or build and link without installing to cargo's bin dir:
+Or build without installing into Cargo's bin dir:
 
 ```sh
 cargo build --release
 ln -sf "$PWD/target/release/meanwhile" ~/.local/bin/meanwhile
 ```
 
-On Arch: `yay -S meanwhile-rain` (the plain name was taken by the old
-Lotus Sametime library, of all things).
+Arch users may still find an AUR package for the upstream project
+(`meanwhile-rain`); packaging files under `packaging/` describe a cargo-based
+build if you want to package this fork yourself.
 
-News comes from **ordinary RSS/Atom feeds** (and a couple of free public
-JSON APIs) — no API key, no AI search.
+## News & places
+
+Headlines come from **open feeds** — no API key and no AI search for the rain
+itself.
 
 **Places** (`g`) map to national outlets, for example:
 
-| place | sources |
-|-------|---------|
+| place | sources (examples) |
+|-------|--------------------|
 | New Zealand | RNZ, Stuff |
 | Australia | ABC, SBS, SMH |
 | UK | BBC, Guardian, Sky, Independent |
@@ -65,30 +79,28 @@ JSON APIs) — no API key, no AI search.
 | India | Times of India, BBC India |
 | China / HK | SCMP, BBC China |
 | France / Germany | France 24, DW |
-| … | Europe, Middle East, Africa, LatAm BBC/Guardian/Al Jazeera packs |
+| … | Europe, Middle East, Africa, LatAm packs |
 
 **Topics** (`t`): world, technology, science, business, sport, politics,
-culture, or a country name. Technology includes **Hacker News top stories
-from the last 24 hours** (official Firebase API by score — not `hnrss/best`,
-which is a longer-horizon ranking). Topic `hacker news` / `hn` is HN-only.
+culture, or a country name. Technology includes **Hacker News** top-of-list
+items via the free Firebase API (not `hnrss/best`, which is a longer-horizon
+ranking). Topic `hacker news` / `hn` is HN-only.
 
-Paste any extra RSS/Atom URLs into `extra_feeds` in the config.
-
-Click a headline to decode its feed blurb into the rain. An optional
-[Exa](https://exa.ai) key (`EXA_API_KEY` in the environment or
-`~/.config/meanwhile/.env`) only upgrades that summary — headlines work
-without it. Pass `--offline` for poetic lines only.
+Add arbitrary feed URLs with `extra_feeds` in the config. Click decodes the
+feed blurb into the rain; an optional [Exa](https://exa.ai) key
+(`EXA_API_KEY`) only upgrades that summary. Pass `--offline` for poetic-only.
 
 ## Keys
 
 | key | action | key | action |
 |-----|--------|-----|--------|
-| `click` | **decode a story into the rain** | `q` | quit |
+| `click` | **decode a story into the rain** | `shift-click` | open article in browser |
 | `enter` | pick a story to decode (↑/↓ + enter) | `space` | pause |
 | `t` | edit topics | `g` | edit places (local intel) |
 | `f` | focus — surface the text | `n` / `o` | a headline / something true |
 | `m` / `p` | toggle news / poetic | `r` | refresh headlines |
-| `+` / `-` | speed | `s` / `?` | status / help |
+| `+` / `-` | speed | `s` / `d` / `?` | status / feed debug / help |
+| `q` | quit | | |
 
 Editors: type + enter adds, `1`–`9` removes, esc closes. Changes persist
 and refetch immediately.
@@ -99,24 +111,21 @@ By default text sits **embedded** — a shade above the field, part of the
 code. Press `f` for **focus** and headlines surface in full contrast when
 you actually want to read the world. The preference sticks.
 
-Click any headline (or press `enter` to pick one) and its story decodes
-into the stream as a short summary — you never leave the rain:
+Click any headline (or press `enter` to pick one) and its story expands
+**from that line** into a short summary — you never leave the rain:
 
 ![summary](shots/summary.png)
 
-## Theming — inherits your terminal
+## Theming
 
 With `"theme": "auto"` (the default), meanwhile rains in *your* palette:
 
-1. **Live terminal colors** via OSC (WezTerm, kitty, foot, …) — whatever
-   scheme is active right now
+1. **Live terminal colors** via OSC (WezTerm, kitty, foot, …)
 2. **WezTerm config** (`color_scheme` / embedded palette table)
-3. **Starship** palette (your prompt colors, e.g. Catppuccin Mocha)
+3. **Starship** palette (e.g. Catppuccin Mocha)
 4. **Omarchy** active theme, when present
 
-Switch your WezTerm scheme or edit the config and the rain follows within
-seconds. Set `"theme": "matrix"` (or `--theme matrix`) to force classic
-green. Plain ANSI is used only when the terminal has no color support.
+Set `"theme": "matrix"` (or `--theme matrix`) for classic phosphor green.
 
 ![omarchy theming](shots/omarchy-theme.png)
 
@@ -132,11 +141,13 @@ green. Plain ANSI is used only when the terminal has no color support.
 | `density`, `speed`, `message_every_seconds` | feel of the rain (density default **0.45**) |
 | `fps` | redraw rate (default **8** — quiet ambient pace; 4–30) |
 | `focus`, `theme`, `show_source`, `ascii_only` | look |
-| `refresh_minutes`, `hours_back` | news freshness window |
+| `refresh_minutes` | how often to re-pull feeds |
 | `extra_feeds` | extra RSS/Atom URLs to always pull |
 | `env_files` | optional paths for `EXA_API_KEY` (summaries only) |
+| `mouse` | set `false` to leave the mouse alone |
 
-Headlines are cached in `~/.cache/meanwhile/` so launch is instant.
+Cache and diagnostics live under `~/.cache/meanwhile/` (`headlines.json`,
+`last-fetch.log`).
 
 ## CLI
 
@@ -149,8 +160,8 @@ meanwhile [OPTIONS]
       --places <PLACES>  comma-separated places for local intel
       --speed <SPEED>    speed multiplier
       --theme <THEME>    auto | matrix
-  -v, --verbose      log each feed fetch to stderr
-      --check-feeds  fetch once, print diagnostics, exit (no TUI)
+  -v, --verbose          log each feed fetch to stderr
+      --check-feeds      fetch once, print diagnostics, exit (no TUI)
   -h, --help
   -V, --version
 ```
@@ -161,24 +172,24 @@ meanwhile [OPTIONS]
 # one-shot NZ check (no rain UI)
 meanwhile --check-feeds --places "New Zealand"
 
-# same, with timing lines on stderr too
+# same, with timing lines on stderr
 meanwhile --check-feeds -v --places "New Zealand"
 
-# while running: press `d` for the last fetch log, `r` to retry
-# log file always written to:
-#   ~/.cache/meanwhile/last-fetch.log
+# while running: press d for the last fetch log, r to retry
+# log file: ~/.cache/meanwhile/last-fetch.log
 ```
 
 ## Notes
 
-- Plain click decodes a summary in-app; shift-click follows the OSC 8
-  hyperlink (kitty, Alacritty, ghostty, foot, WezTerm and most modern
-  terminals; inside tmux you need a recent tmux). Set `"mouse": false`
-  in the config to leave the mouse alone entirely.
-- CPU ~1–2% of one core; it's just characters.
+- Plain click decodes in-app; **shift-click opens the browser** (handled by
+  meanwhile so it works under WezTerm mouse tracking). OSC 8 is still emitted
+  as a bonus for terminals that honour it.
+- Defaults are tuned for multi-pane use (~8 fps, modest density); raise
+  `fps` / `density` if you want a denser wall.
 - Every so often — not often — the rain has something to say to you
   directly. If you're impatient, you know whose name to type.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE). Original copyright Tom Davenport; this fork
+continues under the same license.

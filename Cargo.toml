@@ -5,7 +5,7 @@ edition = "2021"
 description = "Horizontal matrix rain of things happening right now"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/tomdavenport/meanwhile"
+repository = "https://github.com/brendan-jarvis/meanwhile"
 keywords = ["terminal", "matrix", "news", "tui"]
 categories = ["command-line-utilities"]
 
