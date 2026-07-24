@@ -278,41 +278,47 @@ impl Newsfeed {
             .take(3)
             .collect();
 
+        // Place / country intel: smaller markets (NZ, etc.) need a wider
+        // time window and a news-category pass, not only a "local events" query.
+        let place_hours = cfg.hours_back.max(72.0);
         for place in &places {
-            let query = format!("{place} — local news, events and what is happening there now");
+            // 1) National / regional news (best for countries like "New Zealand")
+            let national = format!("{place} news — significant stories and what is happening there now");
             if let Ok(results) =
-                self.search(&api_key, &query, 10, None, "fast", cfg.hours_back)
+                self.search_resilient(&api_key, &national, 20, Some("news"), place_hours)
             {
                 items.extend(self.collect(&results, "local", &mut seen, cfg.show_source));
+            }
+            // 2) Community / local angle
+            let local = format!("{place} — local news, events and what is happening there now");
+            if let Ok(results) =
+                self.search_resilient(&api_key, &local, 12, Some("news"), place_hours)
+            {
+                items.extend(self.collect(&results, "local", &mut seen, cfg.show_source));
+            }
+            // 3) Uncategorized fallback if Exa news category is thin for the region
+            if items.iter().filter(|i| i.kind == "local").count() < 3 {
+                let broad = format!("{place} current events");
+                if let Ok(results) =
+                    self.search_resilient(&api_key, &broad, 15, None, place_hours)
+                {
+                    items.extend(self.collect(&results, "local", &mut seen, cfg.show_source));
+                }
             }
         }
 
         for topic in cfg.topics.iter().take(4) {
+            // Skip topics that duplicate a configured place (already fetched as local).
+            let tnorm = topic.trim().to_lowercase();
+            if places.iter().any(|p| p.to_lowercase() == tnorm) {
+                continue;
+            }
             let query = format!("{topic} — the most significant news right now");
-            let results = match self.search(
-                &api_key,
-                &query,
-                25,
-                Some("news"),
-                "fast",
-                cfg.hours_back,
-            ) {
-                Ok(r) => r,
-                Err(_) => {
-                    match self.search(
-                        &api_key,
-                        &query,
-                        25,
-                        Some("news"),
-                        "auto",
-                        cfg.hours_back,
-                    ) {
-                        Ok(r) => r,
-                        Err(_) => continue,
-                    }
-                }
-            };
-            items.extend(self.collect(&results, "news", &mut seen, cfg.show_source));
+            if let Ok(results) =
+                self.search_resilient(&api_key, &query, 25, Some("news"), cfg.hours_back)
+            {
+                items.extend(self.collect(&results, "news", &mut seen, cfg.show_source));
+            }
         }
 
         let mut g = self.inner.0.lock().unwrap();
@@ -349,6 +355,21 @@ impl Newsfeed {
             }
         } else if g.items.is_empty() {
             g.status = "news offline — poetic only".into();
+        }
+    }
+
+    /// Try `fast`, then `auto` on failure (HTTP errors or empty).
+    fn search_resilient(
+        &self,
+        api_key: &str,
+        query: &str,
+        num: u32,
+        category: Option<&str>,
+        hours_back: f64,
+    ) -> Result<Vec<Value>, String> {
+        match self.search(api_key, query, num, category, "fast", hours_back) {
+            Ok(r) if !r.is_empty() => Ok(r),
+            Ok(_) | Err(_) => self.search(api_key, query, num, category, "auto", hours_back),
         }
     }
 }

@@ -56,13 +56,12 @@ impl Default for Config {
         Self {
             topics: vec![
                 "world news".into(),
-                "artificial intelligence".into(),
-                "uk".into(),
+                "technology".into(),
             ],
             places: vec![],
             refresh_minutes: 15.0,
-            hours_back: 36.0,
-            poetic_ratio: 0.4,
+            hours_back: 48.0,
+            poetic_ratio: 0.35,
             message_every_seconds: 1.8,
             density: 0.45,
             speed: 1.0,
@@ -71,9 +70,10 @@ impl Default for Config {
             theme: "auto".into(),
             show_source: false,
             ascii_only: false,
+            // Look for EXA_API_KEY here (plus the process environment).
             env_files: vec![
-                "~/dev/tom-os/.env".into(),
-                "~/dev/exa-newsdesk/.env".into(),
+                "~/.config/meanwhile/.env".into(),
+                "~/.env".into(),
             ],
             mouse: true,
         }
@@ -108,6 +108,37 @@ pub fn load_config() -> Config {
         }
         if obj.get("message_every_seconds").and_then(|v| v.as_f64()) == Some(3.0) {
             obj.remove("message_every_seconds");
+        }
+        // Old packaged defaults pointed at another developer's machine.
+        if let Some(files) = obj.get("env_files").and_then(|v| v.as_array()) {
+            let only_legacy = files.iter().all(|v| {
+                matches!(
+                    v.as_str(),
+                    Some("~/dev/tom-os/.env" | "~/dev/exa-newsdesk/.env")
+                )
+            });
+            if only_legacy && !files.is_empty() {
+                obj.insert(
+                    "env_files".into(),
+                    Value::Array(vec![
+                        Value::String("~/.config/meanwhile/.env".into()),
+                        Value::String("~/.env".into()),
+                    ]),
+                );
+            }
+        }
+        // UK-centric default topic set → neutral (only if still the old triple)
+        if let Some(topics) = obj.get("topics").and_then(|v| v.as_array()) {
+            let names: Vec<&str> = topics.iter().filter_map(|v| v.as_str()).collect();
+            if names == ["world news", "artificial intelligence", "uk"] {
+                obj.insert(
+                    "topics".into(),
+                    Value::Array(vec![
+                        Value::String("world news".into()),
+                        Value::String("technology".into()),
+                    ]),
+                );
+            }
         }
     }
     if let Some(env_file) = user.get("env_file").and_then(|v| v.as_str()).map(str::to_string) {
@@ -150,13 +181,29 @@ pub fn resolve_api_key(cfg: &Config) -> Option<String> {
             return Some(key);
         }
     }
-    for env_file in &cfg.env_files {
-        let path = expand_user(env_file);
+    // Configured paths, then a few always-checked fallbacks.
+    let mut paths: Vec<PathBuf> = cfg.env_files.iter().map(|p| expand_user(p)).collect();
+    for extra in [
+        "~/.config/meanwhile/.env",
+        "~/.env",
+        "~/dev/tom-os/.env",
+        "~/dev/exa-newsdesk/.env",
+    ] {
+        let p = expand_user(extra);
+        if !paths.contains(&p) {
+            paths.push(p);
+        }
+    }
+    for path in paths {
         let text = match fs::read_to_string(&path) {
             Ok(t) => t,
             Err(_) => continue,
         };
         for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
             if let Some(rest) = line.strip_prefix("EXA_API_KEY=") {
                 let key = rest.trim().trim_matches('"').trim_matches('\'').to_string();
                 if !key.is_empty() {

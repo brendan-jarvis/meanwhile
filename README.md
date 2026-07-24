@@ -51,8 +51,19 @@ Lotus Sametime library, of all things).
 
 News comes from the [Exa](https://exa.ai) search API (`fast` type — their
 cheapest tier, a few requests per refresh). Put `EXA_API_KEY` in your
-environment (or point `env_files` in the config at a `.env` that has it).
-**No key? It still runs**, poetic-only. Or pass `--offline`.
+environment, or in `~/.config/meanwhile/.env` / `~/.env`:
+
+```sh
+echo 'EXA_API_KEY=your_key_here' >> ~/.config/meanwhile/.env
+```
+
+**No key? It still runs**, poetic-only (you'll see that in the status toast).
+Or pass `--offline`.
+
+**Local / country news** — press `g` and add places (e.g. `New Zealand`,
+`Auckland`). Places are fetched as regional news with a wider time window so
+smaller markets aren't empty; they're preferred in the rain over global
+topics. Topics (`t`) are separate worldwide subjects.
 
 ## Keys
 

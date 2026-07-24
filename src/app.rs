@@ -266,7 +266,14 @@ impl App {
             self.news_q.shuffle(&mut rand::thread_rng());
         }
         let mut rng = rand::thread_rng();
-        if !self.local_q.is_empty() && (self.news_q.is_empty() || rng.gen_bool(0.55)) {
+        // Prefer local/place intel when configured — countries like NZ otherwise
+        // get drowned by global topics.
+        let prefer_local = if self.cfg.places.iter().any(|p| !p.trim().is_empty()) {
+            0.75
+        } else {
+            0.55
+        };
+        if !self.local_q.is_empty() && (self.news_q.is_empty() || rng.gen_bool(prefer_local)) {
             return self.local_q.pop();
         }
         self.news_q.pop()
@@ -1124,6 +1131,18 @@ impl App {
         self.term.enter(self.cfg.mouse)?;
         // Inherit the active WezTerm (or other) palette now that the TTY is raw.
         self.adopt_terminal_theme(0.0);
+        // Surface feed status early (e.g. missing EXA_API_KEY).
+        {
+            let (_, _, status, _) = self.feed.snapshot();
+            if status.contains("no api key") || status.contains("poetic only") {
+                self.flash(&status, 0.0);
+            } else if !self.cfg.places.is_empty() {
+                self.flash(
+                    &format!("places: {} — refreshing…", self.cfg.places.join(", ")),
+                    0.0,
+                );
+            }
+        }
         let mut last = monotonic();
         let mut frame = 0u64;
         // Always leave() on every exit path (including panic unwind via Drop).
