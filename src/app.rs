@@ -28,7 +28,8 @@ const HELP: &[&str] = &[
     " meanwhile — things happening right now ",
     "",
     "  q        quit              space   pause",
-    "  click    decode a story    enter   pick one to decode",
+    "  click    decode a story    shift-click  open in browser",
+    "  enter    pick one to decode",
     "  t        edit topics       g       edit places (local intel)",
     "  f        focus mode        o       something true now",
     "  m        toggle news       p       toggle poetic",
@@ -240,10 +241,16 @@ impl App {
         self.term.set_styles(self.pal.sgr.clone());
     }
 
+    fn panel_open(&self) -> bool {
+        self.show_help || self.show_debug || self.editor.is_some() || self.picker.is_some()
+    }
+
     fn guard(&self, row: isize, x: isize) -> bool {
         if row == self.h as isize - 1 && self.show_status {
             return true;
         }
+        // Modal panels (help, debug, editors, picker) own their rectangle —
+        // rain, residue, and headlines must never paint there.
         if let Some((y0, x0, y1, x1)) = self.panel_rect {
             if y0 <= row && row <= y1 && x0 <= x && x <= x1 {
                 return true;
@@ -439,11 +446,11 @@ impl App {
             self.tick_wake(t, dt);
             return;
         }
-        let quiet = self.picker.is_none()
-            && self.editor.is_none()
-            && !self.show_help
-            && !self.show_debug;
-        if quiet && rand::thread_rng().gen::<f64>() < dt / 3600.0 {
+        // Freeze the rain under modal popups so nothing advances into them.
+        if self.panel_open() {
+            return;
+        }
+        if rand::thread_rng().gen::<f64>() < dt / 3600.0 {
             self.trigger_wake(t);
             return;
         }
@@ -485,17 +492,15 @@ impl App {
             self.spans.entry(m.row).or_default().push(m.span_range());
         }
 
-        // mount pending summary
-        let pending = self.reader_pending.lock().unwrap().take();
-        if let Some((tok, art)) = pending {
-            self.mount_summary(t, tok, art);
+        // mount pending summary (skip under modal — would steal focus visually)
+        if !self.panel_open() {
+            let pending = self.reader_pending.lock().unwrap().take();
+            if let Some((tok, art)) = pending {
+                self.mount_summary(t, tok, art);
+            }
         }
 
-        let rect = if self.show_help
-            || self.show_debug
-            || self.editor.is_some()
-            || self.picker.is_some()
-        {
+        let rect = if self.panel_open() {
             Some(self.compute_panel_rect())
         } else {
             None
@@ -511,7 +516,9 @@ impl App {
             self.panel_rect = None;
         }
 
-        if !self.paused {
+        // While a modal is up, freeze the field: no residue, streams, or
+        // headlines paint — only the panel (drawn last) may touch those cells.
+        if !self.paused && !self.panel_open() {
             // Very sparse settled-field sparkle (a handful of cells per frame).
             let n = 3.max((self.w * self.h) / 1200).min(12);
             let mut rng = rand::thread_rng();
@@ -561,12 +568,21 @@ impl App {
             self.streams.retain(|s| !s.dead(self.w));
 
             for m in &mut self.messages {
+                // Never let a headline paint through a modal, even if panel_open
+                // races with a late message.
+                if let Some((y0, x0, y1, x1)) = self.panel_rect {
+                    let (lo, hi) = m.span_range();
+                    if m.row >= y0 && m.row <= y1 && !(hi < x0 || lo > x1) {
+                        continue;
+                    }
+                }
                 m.draw(&mut self.term, t, &self.pal, &self.glyphs);
             }
             self.messages.retain(|m| !m.done);
         }
 
-        if self.show_status {
+        // Status / toast sit under the modal and must not cover it either.
+        if self.show_status && !self.panel_open() {
             let (_, _, status, at) = self.feed.snapshot();
             let when = at
                 .map(|ts| {
@@ -603,7 +619,7 @@ impl App {
         }
 
         let (ref msg, until) = self.toast;
-        if !msg.is_empty() && t < until {
+        if !msg.is_empty() && t < until && !self.panel_open() {
             let dim = self.pal.dim;
             let shown = format!(" {msg} ");
             let x = (self.w as isize - shown.chars().count() as isize - 3).max(0);
@@ -611,11 +627,7 @@ impl App {
                 .span_cells(self.h as isize - 1, x, dim, &shown);
         }
 
-        if self.show_help
-            || self.show_debug
-            || self.editor.is_some()
-            || self.picker.is_some()
-        {
+        if self.panel_open() {
             self.draw_panel();
         }
         let _ = self.term.present();
@@ -828,6 +840,32 @@ impl App {
         }
     }
 
+    /// Shift-click: open the article in the system browser (OSC 8 is unreliable
+    /// under application mouse tracking in WezTerm).
+    fn shift_click(&mut self, x: isize, y: isize, t: f64) {
+        if let Some(url) = self.url_at(x, y) {
+            match open_url(&url) {
+                Ok(()) => self.flash("opening in browser…", t),
+                Err(e) => self.flash(&format!("open failed: {e}"), t),
+            }
+        }
+    }
+
+    fn url_at(&self, x: isize, y: isize) -> Option<String> {
+        for m in &self.messages {
+            let n = m.text.chars().count() as isize;
+            if m.row == y && m.x0 - 1 <= x && x <= m.x0 + n {
+                if let Some(ref url) = m.url {
+                    if !url.is_empty() {
+                        return Some(url.clone());
+                    }
+                }
+            }
+        }
+        // Fall back to recently shown headlines near this row? only exact hit.
+        None
+    }
+
     fn panel_lines(&self) -> Vec<String> {
         if self.show_help {
             return HELP.iter().map(|s| s.to_string()).collect();
@@ -925,10 +963,13 @@ impl App {
             None => return,
         };
         let bw = (x1 - x0 + 1) as usize;
+        let bh = (y1 - y0 + 1) as usize;
+        // Opaque backdrop: wipe every cell in the rect every frame so nothing
+        // from the rain buffer can show through (blank style + spaces).
         let blank = self.pal.blank;
         let spaces = " ".repeat(bw);
-        for i in 0..=(y1 - y0) {
-            self.term.span_cells(y0 + i, x0, blank, &spaces);
+        for i in 0..bh {
+            self.term.span_cells(y0 + i as isize, x0, blank, &spaces);
         }
         let accent = if let Some(ref ed) = self.editor {
             if ed.kind == "places" {
@@ -944,14 +985,24 @@ impl App {
         let dim = self.pal.dim;
         let lines = self.panel_lines();
         for (i, s) in lines.iter().enumerate() {
+            let row = y0 + 1 + i as isize;
+            if row > y1 {
+                break;
+            }
             let attr = if i == 0 || s.trim_start().starts_with('▸') {
                 accent
             } else {
                 dim
             };
             let clipped: String = s.chars().take(bw.saturating_sub(3)).collect();
-            self.term
-                .span_cells(y0 + 1 + i as isize, x0 + 2, attr, &clipped);
+            // Pad each content line to full width so leftover rain glyphs
+            // cannot peek past the end of short help lines.
+            let mut line = format!("  {clipped}");
+            while line.chars().count() < bw {
+                line.push(' ');
+            }
+            let line: String = line.chars().take(bw).collect();
+            self.term.span_cells(row, x0, attr, &line);
         }
     }
 
@@ -988,13 +1039,27 @@ impl App {
         for tok in tokenize(data) {
             match tok {
                 Token::Mouse { btn, mx, my, press } => {
+                    // SGR mouse: button = base (0=left) | 4=shift | 8=meta | 16=ctrl.
+                    // With mouse reporting on, WezTerm delivers shift-clicks to us
+                    // instead of following OSC 8 — open the URL ourselves.
+                    let motion = btn & 32 != 0;
+                    let scroll = btn >= 64;
+                    let left = (btn & 0b11) == 0;
+                    let shift = btn & 4 != 0;
                     if press
-                        && btn == 0
+                        && left
+                        && !motion
+                        && !scroll
                         && self.wake.is_none()
                         && self.editor.is_none()
                         && !self.show_help
+                        && !self.show_debug
                     {
-                        self.click(mx - 1, my - 1, t);
+                        if shift {
+                            self.shift_click(mx - 1, my - 1, t);
+                        } else {
+                            self.click(mx - 1, my - 1, t);
+                        }
                     }
                 }
                 Token::Key(key_b) => {
@@ -1383,6 +1448,36 @@ fn theme_rgb_eq(a: &ThemeColors, b: &ThemeColors) -> bool {
         && a.yellow == b.yellow
         && a.cyan == b.cyan
         && a.bwhite == b.bwhite
+}
+
+/// Open a URL in the user's browser. Handles native Linux, macOS, and WSL.
+fn open_url(url: &str) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("not an http(s) url".into());
+    }
+    // Prefer platform tools in order; WSL often has neither xdg-open nor wslview.
+    let candidates: &[&[&str]] = &[
+        &["xdg-open", url],
+        &["wslview", url],
+        &["open", url], // macOS
+        &["cmd.exe", "/c", "start", "", url], // Windows via WSL
+        &["/mnt/c/Windows/System32/cmd.exe", "/c", "start", "", url],
+    ];
+    let mut last = "no opener found".to_string();
+    for args in candidates {
+        let (bin, rest) = args.split_first().unwrap();
+        match std::process::Command::new(bin)
+            .args(rest)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => return Ok(()),
+            Err(e) => last = format!("{bin}: {e}"),
+        }
+    }
+    Err(last)
 }
 
 fn local_offset_secs() -> i64 {

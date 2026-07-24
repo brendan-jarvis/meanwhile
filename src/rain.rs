@@ -301,9 +301,8 @@ impl Message {
             }
             Phase::Dwell => {
                 let shown = format!(" {} ", self.text);
-                // Frame-buffer paint (stable → present() no-ops after first frame).
-                term.span_cells(self.row, self.x0 - 1, attr, &shown);
-                // OSC 8 once so shift-click still opens the article.
+                // Prefer OSC 8 hyperlink paint once; WezTerm may still not
+                // honour it under mouse tracking — app handles shift-click.
                 if self.url.is_some() && !self.link_painted {
                     let attr_sgr = term
                         .styles()
@@ -317,7 +316,12 @@ impl Message {
                         &shown,
                         self.url.as_deref(),
                     );
+                    // Stamp true style into the cell buffer so later residue
+                    // doesn't "win" over a blank style-0 hyperlink pass.
+                    term.span_cells(self.row, self.x0 - 1, attr, &shown);
                     self.link_painted = true;
+                } else {
+                    term.span_cells(self.row, self.x0 - 1, attr, &shown);
                 }
             }
             Phase::Erase => {
