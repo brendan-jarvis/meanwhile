@@ -39,6 +39,9 @@ pub struct Config {
     pub show_source: bool,
     pub ascii_only: bool,
     pub env_files: Vec<String>,
+    /// Extra RSS/Atom feed URLs (always fetched as general news).
+    #[serde(default)]
+    pub extra_feeds: Vec<String>,
     #[serde(default = "default_mouse")]
     pub mouse: bool,
 }
@@ -75,6 +78,7 @@ impl Default for Config {
                 "~/.config/meanwhile/.env".into(),
                 "~/.env".into(),
             ],
+            extra_feeds: vec![],
             mouse: true,
         }
     }

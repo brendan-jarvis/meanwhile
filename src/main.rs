@@ -76,12 +76,13 @@ fn main() {
         cfg.ascii_only = true;
     }
 
+    // Headlines come from RSS (no key). Exa key is optional for richer summaries.
     let key = if args.offline {
         None
     } else {
         resolve_api_key(&cfg)
     };
-    let feed = Arc::new(Newsfeed::new(cfg.clone(), key));
+    let feed = Arc::new(Newsfeed::new(cfg.clone(), key, args.offline));
     feed.start();
 
     let term = match Term::new() {

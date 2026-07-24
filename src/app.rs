@@ -62,6 +62,7 @@ struct Link {
     text: String,
     url: String,
     domain: String,
+    summary: Option<String>,
 }
 
 struct Article {
@@ -312,6 +313,7 @@ impl App {
                             text: item.text.clone(),
                             url: u.clone(),
                             domain: item.domain.clone(),
+                            summary: item.summary.clone(),
                         },
                     );
                     self.shown_links.truncate(9);
@@ -613,11 +615,17 @@ impl App {
         let url = link.url.clone();
         let text = link.text.clone();
         let domain = link.domain.clone();
+        let feed_summary = link.summary.clone();
         thread::Builder::new()
             .name("summary".into())
             .spawn(move || {
-                let (title, domain, summary, url) =
-                    fetch_summary(&api_key, &url, &text, &domain);
+                let (title, domain, summary, url) = fetch_summary(
+                    &api_key,
+                    &url,
+                    &text,
+                    &domain,
+                    feed_summary.as_deref(),
+                );
                 *pending.lock().unwrap() = Some((
                     tok,
                     Article {
@@ -707,10 +715,16 @@ impl App {
                     return;
                 }
                 if let Some(ref url) = m.url {
+                    let summary = self
+                        .shown_links
+                        .iter()
+                        .find(|l| l.url == *url)
+                        .and_then(|l| l.summary.clone());
                     let link = Link {
                         text: m.text.clone(),
                         url: url.clone(),
                         domain: m.domain.clone(),
+                        summary,
                     };
                     self.open_summary(link, t);
                     return;
@@ -899,6 +913,7 @@ impl App {
                     text: self.shown_links[sel].text.clone(),
                     url: self.shown_links[sel].url.clone(),
                     domain: self.shown_links[sel].domain.clone(),
+                    summary: self.shown_links[sel].summary.clone(),
                 };
                 self.open_summary(link, t);
                 self.close_panel();
@@ -909,6 +924,7 @@ impl App {
                         text: self.shown_links[idx - 1].text.clone(),
                         url: self.shown_links[idx - 1].url.clone(),
                         domain: self.shown_links[idx - 1].domain.clone(),
+                        summary: self.shown_links[idx - 1].summary.clone(),
                     };
                     self.open_summary(link, t);
                     self.close_panel();
@@ -1131,16 +1147,18 @@ impl App {
         self.term.enter(self.cfg.mouse)?;
         // Inherit the active WezTerm (or other) palette now that the TTY is raw.
         self.adopt_terminal_theme(0.0);
-        // Surface feed status early (e.g. missing EXA_API_KEY).
+        // Surface feed status early.
         {
             let (_, _, status, _) = self.feed.snapshot();
-            if status.contains("no api key") || status.contains("poetic only") {
+            if status.contains("poetic only") || status.contains("unreachable") {
                 self.flash(&status, 0.0);
             } else if !self.cfg.places.is_empty() {
                 self.flash(
-                    &format!("places: {} — refreshing…", self.cfg.places.join(", ")),
+                    &format!("places: {} — fetching rss…", self.cfg.places.join(", ")),
                     0.0,
                 );
+            } else {
+                self.flash("fetching rss…", 0.0);
             }
         }
         let mut last = monotonic();

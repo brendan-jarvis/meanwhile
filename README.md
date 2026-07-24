@@ -49,21 +49,35 @@ ln -sf "$PWD/target/release/meanwhile" ~/.local/bin/meanwhile
 On Arch: `yay -S meanwhile-rain` (the plain name was taken by the old
 Lotus Sametime library, of all things).
 
-News comes from the [Exa](https://exa.ai) search API (`fast` type — their
-cheapest tier, a few requests per refresh). Put `EXA_API_KEY` in your
-environment, or in `~/.config/meanwhile/.env` / `~/.env`:
+News comes from **ordinary RSS/Atom feeds** (and a couple of free public
+JSON APIs) — no API key, no AI search.
 
-```sh
-echo 'EXA_API_KEY=your_key_here' >> ~/.config/meanwhile/.env
-```
+**Places** (`g`) map to national outlets, for example:
 
-**No key? It still runs**, poetic-only (you'll see that in the status toast).
-Or pass `--offline`.
+| place | sources |
+|-------|---------|
+| New Zealand | RNZ, Stuff |
+| Australia | ABC, SBS, SMH |
+| UK | BBC, Guardian, Sky, Independent |
+| US | NPR, PBS, NYT, Politico |
+| Canada | CBC, Globe and Mail |
+| Japan | NHK |
+| India | Times of India, BBC India |
+| China / HK | SCMP, BBC China |
+| France / Germany | France 24, DW |
+| … | Europe, Middle East, Africa, LatAm BBC/Guardian/Al Jazeera packs |
 
-**Local / country news** — press `g` and add places (e.g. `New Zealand`,
-`Auckland`). Places are fetched as regional news with a wider time window so
-smaller markets aren't empty; they're preferred in the rain over global
-topics. Topics (`t`) are separate worldwide subjects.
+**Topics** (`t`): world, technology, science, business, sport, politics,
+culture, or a country name. Technology includes **Hacker News top stories
+from the last 24 hours** (official Firebase API by score — not `hnrss/best`,
+which is a longer-horizon ranking). Topic `hacker news` / `hn` is HN-only.
+
+Paste any extra RSS/Atom URLs into `extra_feeds` in the config.
+
+Click a headline to decode its feed blurb into the rain. An optional
+[Exa](https://exa.ai) key (`EXA_API_KEY` in the environment or
+`~/.config/meanwhile/.env`) only upgrades that summary — headlines work
+without it. Pass `--offline` for poetic lines only.
 
 ## Keys
 
@@ -119,7 +133,8 @@ green. Plain ANSI is used only when the terminal has no color support.
 | `fps` | redraw rate (default **8** — quiet ambient pace; 4–30) |
 | `focus`, `theme`, `show_source`, `ascii_only` | look |
 | `refresh_minutes`, `hours_back` | news freshness window |
-| `env_files` | where to find `EXA_API_KEY` |
+| `extra_feeds` | extra RSS/Atom URLs to always pull |
+| `env_files` | optional paths for `EXA_API_KEY` (summaries only) |
 
 Headlines are cached in `~/.cache/meanwhile/` so launch is instant.
 
