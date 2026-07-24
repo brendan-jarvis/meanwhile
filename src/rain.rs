@@ -133,8 +133,8 @@ impl Noise {
         self.last_tail = self.last_tail.max(tail);
 
         // When the head advances, paint the whole trail once. Between advances
-        // only the bright head cell updates — at ~12 fps that still reads as
-        // living rain without rewriting every stream body every frame.
+        // only the bright head cell updates — at ambient fps that still reads
+        // as living rain without rewriting every stream body every frame.
         self.shimmer_phase = self.shimmer_phase.wrapping_add(1);
         let redraw_len = if head_moved {
             self.length

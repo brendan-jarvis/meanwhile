@@ -395,11 +395,10 @@ impl App {
             return;
         }
         let mult = self.cfg.speed;
-        // Fewer concurrent streams on large panes — density still scales, but
-        // hard-cap so a full-screen split doesn't spawn 60+ writers.
-        let target = 6
-            .max((self.h as f64 * self.cfg.density * 1.15) as usize)
-            .min(28);
+        // Density-scaled streams with a hard cap so large splits stay quiet.
+        let target = 4
+            .max((self.h as f64 * self.cfg.density * 1.1) as usize)
+            .min(20);
         while self.streams.len() < target && rand::thread_rng().gen::<f64>() < 0.35 {
             let eraser = rand::thread_rng().gen::<f64>() < 0.22;
             self.streams.push(Noise::new(self.h, self.w, eraser));
@@ -1117,8 +1116,8 @@ impl App {
                     self.tick(t, dt);
                 }
                 self.draw(t);
-                // Classic animation pace (~12 fps default). Motion is integrated
-                // with real dt, so lowering fps only softens the redraw rate.
+                // Ambient pace (~8 fps default). Motion uses real dt, so fps
+                // only controls redraw rate / PTY traffic.
                 let fps = self.cfg.fps.clamp(4.0, 30.0);
                 let frame_budget = 1.0 / fps;
                 let target = t + frame_budget;

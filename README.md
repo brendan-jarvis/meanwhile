@@ -101,8 +101,8 @@ ANSI fallback. Set `"theme": "matrix"` in the config (or pass
 | `topics` | what the news follows (also: `t` in-app) |
 | `places` | places for local intel (also: `g` in-app) |
 | `poetic_ratio` | fraction of lines that are poetic |
-| `density`, `speed`, `message_every_seconds` | feel of the rain |
-| `fps` | redraw rate (default **12** — animation pace; 4–30) |
+| `density`, `speed`, `message_every_seconds` | feel of the rain (density default **0.45**) |
+| `fps` | redraw rate (default **8** — quiet ambient pace; 4–30) |
 | `focus`, `theme`, `show_source`, `ascii_only` | look |
 | `refresh_minutes`, `hours_back` | news freshness window |
 | `env_files` | where to find `EXA_API_KEY` |

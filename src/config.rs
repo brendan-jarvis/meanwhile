@@ -28,7 +28,7 @@ pub struct Config {
     pub message_every_seconds: f64,
     pub density: f64,
     pub speed: f64,
-    /// Target frames per second (ambient rain; 12 feels like classic animation).
+    /// Target frames per second (ambient rain; 8 keeps the PTY quiet).
     #[serde(default = "default_fps")]
     pub fps: f64,
     pub focus: bool,
@@ -47,7 +47,7 @@ fn default_mouse() -> bool {
 }
 
 fn default_fps() -> f64 {
-    12.0
+    8.0
 }
 
 impl Default for Config {
@@ -63,9 +63,9 @@ impl Default for Config {
             hours_back: 36.0,
             poetic_ratio: 0.4,
             message_every_seconds: 1.8,
-            density: 0.75,
+            density: 0.45,
             speed: 1.0,
-            fps: 12.0,
+            fps: 8.0,
             focus: false,
             theme: "auto".into(),
             show_source: false,
@@ -94,14 +94,18 @@ pub fn load_config() -> Config {
         Err(_) => return cfg,
     };
 
-    // migrate v0.1 auto-written defaults to the denser v0.2 feel
-    if user.get("density").and_then(|v| v.as_f64()) == Some(0.45) {
-        if let Some(obj) = user.as_object_mut() {
+    // migrate prior auto-written denser/faster defaults → quieter ambient
+    if let Some(obj) = user.as_object_mut() {
+        if obj.get("density").and_then(|v| v.as_f64()) == Some(0.75) {
             obj.remove("density");
         }
-    }
-    if user.get("message_every_seconds").and_then(|v| v.as_f64()) == Some(3.0) {
-        if let Some(obj) = user.as_object_mut() {
+        if matches!(
+            obj.get("fps").and_then(|v| v.as_f64()),
+            Some(12.0) | Some(20.0) | Some(30.0)
+        ) {
+            obj.remove("fps");
+        }
+        if obj.get("message_every_seconds").and_then(|v| v.as_f64()) == Some(3.0) {
             obj.remove("message_every_seconds");
         }
     }
