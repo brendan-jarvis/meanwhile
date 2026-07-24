@@ -44,24 +44,68 @@ like WezTerm.
 
 ## Install
 
-### Prebuilt binaries (no Rust required)
+### Prebuilt binaries (no Rust / no cargo build)
 
-GitHub **Releases** ship ready-to-run archives for Linux, macOS, and Windows:
+GitHub **Releases** ship ready-to-run archives. Download, extract, run —
+no Rust toolchain and no compile step.
 
-**https://github.com/brendan-jarvis/meanwhile/releases**
+**https://github.com/brendan-jarvis/meanwhile/releases/latest**
+
+Releases are built automatically by GitHub Actions when a version tag
+(`v*`) is pushed.
+
+#### Quick install
+
+**Linux (x86_64 / Intel-AMD):**
 
 ```sh
-# Example: Linux x86_64
 curl -sL https://github.com/brendan-jarvis/meanwhile/releases/latest/download/meanwhile-x86_64-unknown-linux-gnu.tar.gz \
   | tar -xz
 chmod +x meanwhile
 ./meanwhile
-
-# Optional install
-mkdir -p ~/.local/bin && mv meanwhile ~/.local/bin/
 ```
 
-Pick the asset that matches your machine:
+**Linux (ARM64 / aarch64):**
+
+```sh
+curl -sL https://github.com/brendan-jarvis/meanwhile/releases/latest/download/meanwhile-aarch64-unknown-linux-gnu.tar.gz \
+  | tar -xz
+chmod +x meanwhile
+./meanwhile
+```
+
+**macOS (Apple Silicon):**
+
+```sh
+curl -sL https://github.com/brendan-jarvis/meanwhile/releases/latest/download/meanwhile-aarch64-apple-darwin.tar.gz \
+  | tar -xz
+chmod +x meanwhile
+./meanwhile
+```
+
+**macOS (Intel):**
+
+```sh
+curl -sL https://github.com/brendan-jarvis/meanwhile/releases/latest/download/meanwhile-x86_64-apple-darwin.tar.gz \
+  | tar -xz
+chmod +x meanwhile
+./meanwhile
+```
+
+**Windows:** use [WSL](https://learn.microsoft.com/windows/wsl/) and the
+**Linux x86_64** archive above. Native Windows builds are not published yet
+(the TUI uses Unix terminal APIs).
+
+#### Install onto your PATH (optional)
+
+```sh
+mkdir -p ~/.local/bin
+mv meanwhile ~/.local/bin/
+# ensure ~/.local/bin is on PATH, then:
+meanwhile
+```
+
+#### Assets
 
 | Asset | Platform |
 |-------|----------|
@@ -69,9 +113,8 @@ Pick the asset that matches your machine:
 | `meanwhile-aarch64-unknown-linux-gnu.tar.gz` | Linux ARM64 |
 | `meanwhile-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon |
 | `meanwhile-x86_64-apple-darwin.tar.gz` | macOS Intel |
-| `meanwhile-x86_64-pc-windows-msvc.zip` | Windows x64 |
 
-Each archive includes the binary, `README.md`, and `LICENSE`.
+Each archive contains the `meanwhile` binary, `README.md`, and `LICENSE`.
 
 ### Build from source
 
@@ -96,6 +139,17 @@ After pulling changes, rebuild so CLI flags match the source.
 Arch users may still find an AUR package for the upstream project
 (`meanwhile-rain`); packaging files under `packaging/` describe a cargo-based
 build if you want to package this fork yourself.
+
+### Cutting a release (maintainers)
+
+```sh
+# bump version in Cargo.toml, commit, then:
+git tag v0.5.1
+git push origin v0.5.1
+```
+
+GitHub Actions builds Linux + macOS binaries and attaches them to a new
+[Release](https://github.com/brendan-jarvis/meanwhile/releases).
 
 ## News & places
 

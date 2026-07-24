@@ -1,8 +1,9 @@
 # Build and attach platform binaries to a GitHub Release when a version tag is pushed.
-# Example:
+#
 #   git tag v0.5.0 && git push origin v0.5.0
 #
-# People can then download the binary for their OS without installing Rust.
+# Or re-publish from main (Actions → Release → Run workflow) with a tag name.
+# People can download the binary for their OS without installing Rust / cargo.
 
 name: Release
 
@@ -13,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.5.0). Leave empty to build without publishing."
+        description: "Tag to release (e.g. v0.5.0). Leave empty to build artifacts only."
         required: false
         default: ""
 
@@ -31,31 +32,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Native Windows is not supported yet (Unix termios / raw TTY APIs).
+          # Windows users can run the Linux binary under WSL.
           - name: linux-x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             bin: meanwhile
-            archive: tar.gz
           - name: linux-aarch64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             bin: meanwhile
-            archive: tar.gz
           - name: macos-aarch64
             os: macos-latest
             target: aarch64-apple-darwin
             bin: meanwhile
-            archive: tar.gz
           - name: macos-x86_64
             os: macos-13
             target: x86_64-apple-darwin
             bin: meanwhile
-            archive: tar.gz
-          - name: windows-x86_64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            bin: meanwhile.exe
-            archive: zip
 
     steps:
       - uses: actions/checkout@v4
@@ -68,29 +62,18 @@ jobs:
       - name: Build release
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Package (Unix)
-        if: matrix.archive == 'tar.gz'
+      - name: Package
         shell: bash
         run: |
           set -euo pipefail
           STAGE="meanwhile-${{ matrix.target }}"
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/meanwhile"
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" dist/meanwhile
           chmod +x dist/meanwhile
           cp README.md LICENSE dist/
           tar -C dist -czf "${STAGE}.tar.gz" meanwhile README.md LICENSE
+          ls -lh "${STAGE}.tar.gz"
           echo "ASSET=${STAGE}.tar.gz" >> "$GITHUB_ENV"
-
-      - name: Package (Windows)
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: |
-          $stage = "meanwhile-${{ matrix.target }}"
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/meanwhile.exe"
-          Copy-Item README.md, LICENSE dist/
-          Compress-Archive -Path dist/meanwhile.exe, dist/README.md, dist/LICENSE -DestinationPath "$stage.zip" -Force
-          "ASSET=$stage.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -117,8 +100,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp -v {} release-assets/ \;
+          find artifacts -type f -name '*.tar.gz' -exec cp -v {} release-assets/ \;
           ls -la release-assets
+          test "$(find release-assets -name '*.tar.gz' | wc -l)" -ge 1
 
       - name: Resolve tag
         id: tag
