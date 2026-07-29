@@ -55,9 +55,18 @@ pub struct Config {
     /// Yahoo Finance symbols for ticker mode (e.g. AAPL, SPY, BTC-USD, FBU.NZ).
     #[serde(default = "default_tickers")]
     pub tickers: Vec<String>,
-    /// Scrolling quote strip along the bottom while raining (pure `$` mode is separate).
+    /// Optional edge marquee bar while raining (`top`/`bottom`/`left`/`right`).
     #[serde(default = "default_rain_ticker")]
     pub rain_ticker: bool,
+    /// Edge for the optional marquee bar: `top`, `bottom`, `left`, or `right`.
+    #[serde(default = "default_rain_ticker_edge")]
+    pub rain_ticker_edge: String,
+    /// Decode individual quotes into the rain among news and poetic lines.
+    #[serde(default = "default_quotes_in_rain")]
+    pub quotes_in_rain: bool,
+    /// When quotes are on, chance a spawned line is a stock quote (0–1).
+    #[serde(default = "default_quotes_ratio")]
+    pub quotes_ratio: f64,
     #[serde(default = "default_mouse")]
     pub mouse: bool,
     /// One cached GitHub release check per day (soft toast). Set false to opt out.
@@ -88,7 +97,19 @@ fn default_tickers() -> Vec<String> {
 }
 
 fn default_rain_ticker() -> bool {
+    false
+}
+
+fn default_rain_ticker_edge() -> String {
+    "bottom".into()
+}
+
+fn default_quotes_in_rain() -> bool {
     true
+}
+
+fn default_quotes_ratio() -> f64 {
+    0.28
 }
 
 impl Default for Config {
@@ -118,7 +139,10 @@ impl Default for Config {
             extra_feeds: vec![],
             mode: "rain".into(),
             tickers: default_tickers(),
-            rain_ticker: true,
+            rain_ticker: false,
+            rain_ticker_edge: default_rain_ticker_edge(),
+            quotes_in_rain: true,
+            quotes_ratio: 0.28,
             mouse: true,
             check_updates: true,
         }

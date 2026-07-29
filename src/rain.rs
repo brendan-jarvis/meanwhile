@@ -273,6 +273,9 @@ impl Message {
             "news" => pal.news,
             "local" => pal.local,
             "summary" => pal.reader,
+            "ticker_up" => pal.up,
+            "ticker_down" => pal.down,
+            "ticker" => pal.amber,
             _ => pal.poetic,
         };
         let chars: Vec<char> = self.text.chars().collect();

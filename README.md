@@ -22,8 +22,8 @@ Glance at it and it's rain; look at it and it's the world.
 - **Poetic** — true things happening right now, for scale and gratitude:
   live counters, tonight's moon phase, where the sun is rising, seasonal
   lines. Every one is true.
-- **Ticker** — scrolling quotes along the bottom of rain mode, plus a separate
-  pure full-screen marquee. See [Ticker mode](#ticker-mode) below.
+- **Quotes** — stocks can decode into the rain with news and poems, optional
+  edge marquee bar, or full-screen pure ticker. See [Ticker mode](#ticker-mode).
 
 **Written in Rust** — a single native binary, no Python runtime, low CPU.
 
@@ -52,8 +52,8 @@ Compared with the original Python prototype:
   blocked sources are debuggable.
 - **Terminal theme inheritance** — pulls colours from WezTerm, Starship, OSC,
   and Omarchy-style environments instead of a fixed matrix palette only.
-- **Rain quote strip + pure ticker** — bottom tape while raining (`#` / config
-  `rain_ticker`); `$` / `--ticker` for full-screen marquee only.
+- **Quotes in rain + edge bar + pure ticker** — interspersed quotes (`k`),
+  optional edge bar (`#` / `@` for placement), full-screen `$` / `--ticker`.
 - **Input / mouse hardening** — cleaner exit from raw mode and mouse tracking;
   shift-click opens the article URL in the browser even when OSC-8 is flaky.
 - **Modal occlusion** — help and other panels stay opaque while the rain
@@ -239,19 +239,29 @@ feed blurb into the rain; an optional [Exa](https://exa.ai) key
 
 ## Ticker mode
 
-Two ways to see quotes:
+Three ways to see quotes (same Yahoo universe for all):
 
-### Rain quote strip (default)
+### Quotes in the rain (default)
 
-While raining, a **single scrolling band** of quotes sits on the **bottom row**
-(just above the status bar if `s` is on). Rain never paints through it.
+Individual quotes **decode into the field** like headlines and poems — green up /
+red down / amber flat — mixed among news and poetic lines.
 
 | behaviour | detail |
 |-----------|--------|
-| Default | **On** (`"rain_ticker": true`). Toggle with **`#`** (persists to config). |
-| Universe | Same as pure mode — `tickers` / `SP500` / `SP250` / custom symbols. |
-| Motion | Wall-clock scroll at the same cells/sec as pure ticker (smooth at rain fps). |
-| Refresh | Every **10 minutes**; **`r`** refreshes headlines **and** quotes. |
+| Default | **On** (`"quotes_in_rain": true`). Toggle with **`k`** (persists). |
+| Mix | `"quotes_ratio"` (default **0.28**) is the chance a new line is a quote. |
+| Force one | **`y`** spawns a quote now (like `n` / `o` for news / poetic). |
+| Data | Yahoo spark batches; refresh every **10 min**; **`r`** pulls news + quotes. |
+
+### Optional edge bar
+
+A dedicated marquee along one edge of the rain — never painted over by glyphs.
+
+| behaviour | detail |
+|-----------|--------|
+| Default | **Off** (`"rain_ticker": false`). Toggle with **`#`**. |
+| Placement | `"rain_ticker_edge"`: **`bottom`** · **`top`** · **`left`** · **`right`**. Cycle with **`@`** (turns the bar on). |
+| Motion | Wall-clock scroll at pure-ticker cells/sec (smooth at rain fps). |
 
 ### Pure full-screen ticker
 
@@ -274,20 +284,21 @@ meanwhile --ticker --symbols "AAPL,MSFT,SPY,BTC-USD,FBU.NZ"
 | Layout | Quotes sorted **A→Z**, partitioned **top→bottom** across rows; each symbol on **exactly one** row. |
 | Motion | All rows step **together** at **24 fps**. Alternate rows scroll **opposite** directions. |
 | Speed (`+` / `-`) | Discrete steps locked to 24 fps (even cells/sec: 1.5, 2, 3, 4, 6, 8, 12, 24). |
-| Data | Yahoo Finance spark batches (no API key). Refresh every **10 minutes**; **`r`** forces a pull. |
 | Session toggle | **`$`** switches rain ↔ pure ticker for **this run only** (does not rewrite launch mode). |
-| Launch | Plain `meanwhile` → **rain** (+ bottom strip). `meanwhile --ticker` → full-screen. Config `"mode": "ticker"` also starts pure tickers if set. |
+| Launch | Plain `meanwhile` → **rain** (with quotes in field). `meanwhile --ticker` → full-screen. |
 
 ## Keys
 
 | key | action | key | action |
 |-----|--------|-----|--------|
-| `$` | pure ticker ↔ rain (session only) | `#` | rain quote strip on/off |
-| `space` | pause rain (strip still scrolls) | | |
+| `$` | pure ticker ↔ rain (session only) | `k` | quotes in rain on/off |
+| `#` | edge ticker bar on/off | `@` | cycle bar edge (top/bottom/left/right) |
+| `y` | one quote now | `n` / `o` | headline / poetic now |
+| `space` | pause rain (edge bar still scrolls) | | |
 | `click` | **decode a story into the rain** | `shift-click` | open article in browser |
 | `enter` | pick a story to decode (↑/↓ + enter) | | |
 | `t` | edit topics | `g` | edit places (local intel) |
-| `f` | focus — surface the text | `n` / `o` | a headline / something true |
+| `f` | focus — surface the text | | |
 | `m` / `p` | toggle news / poetic | `r` | refresh feeds / quotes |
 | `+` / `-` | speed | `s` / `d` / `?` | status / feed debug / help |
 | `q` | quit | | |
@@ -335,7 +346,10 @@ Set `"theme": "matrix"` (or `--theme matrix`) for classic phosphor green.
 | `extra_feeds` | extra RSS/Atom URLs to always pull |
 | `mode` | `"rain"` (default launch) or `"ticker"` (pure full-screen) |
 | `tickers` | `SP500`, `SP250`, or explicit Yahoo symbols |
-| `rain_ticker` | bottom quote strip in rain mode (default **true**; also **`#`**) |
+| `quotes_in_rain` | decode quotes into the rain among news/poems (default **true**; **`k`**) |
+| `quotes_ratio` | chance a spawned line is a quote (default **0.28**) |
+| `rain_ticker` | optional edge marquee bar (default **false**; **`#`**) |
+| `rain_ticker_edge` | `top` / `bottom` / `left` / `right` (default **bottom**; **`@`** cycles) |
 | `env_files` | optional paths for `EXA_API_KEY` (summaries only) |
 | `mouse` | set `false` to leave the mouse alone |
 | `check_updates` | soft GitHub release toast (default **true**; set `false` to opt out) |

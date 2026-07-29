@@ -2,7 +2,7 @@ use crate::config::{save_config, Config};
 use crate::news::{fetch_summary, Headline, Newsfeed};
 use crate::poetic::poetic_line;
 use crate::rain::{residue_at, Glyphs, Message, Noise};
-use crate::stocks::StockFeed;
+use crate::stocks::{Quote, StockFeed};
 use crate::term::{StyleId, Term};
 use crate::theme::{
     build_palette, load_auto_theme, query_terminal_theme, theme_sources_mtime, ThemeColors,
@@ -31,19 +31,72 @@ const HELP: &[&str] = &[
     "",
     "  q        quit              space   pause",
     "  $        pure ticker mode  (full-screen quotes — no rain)",
-    "  #        rain ticker strip (quotes along the bottom)",
+    "  k        quotes in rain    (stocks among news / poems)",
+    "  y        one quote now",
+    "  #        edge ticker bar   @  cycle bar edge (top/bottom/left/right)",
     "  click    decode a story    shift-click  open in browser",
     "  enter    pick one to decode",
     "  t        edit topics       g       edit places (local intel)",
-    "  f        focus mode        o       something true now",
+    "  f        focus mode        n/o     headline / poetic now",
     "  m        toggle news       p       toggle poetic",
     "  + / -    speed             r       refresh",
     "  s        status bar        d       feed debug log",
     "  ?        help",
     "",
-    "  rain keeps a quote strip; $ is full-screen ticker only",
+    "  k: quotes decode in the field · #: optional edge bar · $: full-screen",
     "  CLI: meanwhile --ticker   ·  meanwhile --saver   ·  --check-feeds",
 ];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TickerEdge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl TickerEdge {
+    fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "top" => Self::Top,
+            "left" => Self::Left,
+            "right" => Self::Right,
+            _ => Self::Bottom,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Bottom => Self::Top,
+            Self::Top => Self::Left,
+            Self::Left => Self::Right,
+            Self::Right => Self::Bottom,
+        }
+    }
+}
+
+/// Reserved chrome for the optional edge marquee.
+#[derive(Clone, Copy)]
+enum EdgeRegion {
+    /// One horizontal row.
+    Horizontal { row: isize, x0: isize, x1: isize },
+    /// Vertical strip (characters scroll along the height).
+    Vertical {
+        col: isize,
+        y0: isize,
+        y1: isize,
+        width: isize,
+    },
+}
 
 struct TickerBand {
     row: isize,
@@ -123,14 +176,20 @@ pub struct App {
     panel_rect: Option<(isize, isize, isize, isize)>,
     news_on: bool,
     poetic_on: bool,
+    /// Decode stock quotes into the rain among news/poetic (session + config).
+    quotes_in_rain_on: bool,
+    /// Shuffled quote queue for interspersed rain messages.
+    quote_q: Vec<Quote>,
+    quote_gen: u64,
     toast: (String, f64),
     /// Soft update whisper: (message, until_monotonic, url).
     update_hint: (String, f64, String),
     spans: HashMap<isize, Vec<(isize, isize)>>,
     /// Pure stock marquee — no matrix field at all.
     ticker_mode: bool,
-    /// Session flag: scrolling quote strip at the bottom of rain mode.
+    /// Optional edge marquee bar (top/bottom/left/right).
     rain_ticker_on: bool,
+    rain_ticker_edge: TickerEdge,
     stock_feed: Option<Arc<StockFeed>>,
     ticker_bands: Vec<TickerBand>,
     /// Generation of quote snapshot last painted into band tapes.
@@ -187,6 +246,8 @@ impl App {
         let w = term.w;
         let ticker_mode = cfg.mode.eq_ignore_ascii_case("ticker");
         let rain_ticker_on = cfg.rain_ticker;
+        let rain_ticker_edge = TickerEdge::parse(&cfg.rain_ticker_edge);
+        let quotes_in_rain_on = cfg.quotes_in_rain;
         let mut term = term;
         term.set_styles(pal.sgr.clone());
         Self {
@@ -223,11 +284,15 @@ impl App {
             panel_rect: None,
             news_on: true,
             poetic_on: true,
+            quotes_in_rain_on,
+            quote_q: Vec::new(),
+            quote_gen: 0,
             toast: (String::new(), 0.0),
             update_hint: (String::new(), 0.0, String::new()),
             spans: HashMap::new(),
             ticker_mode,
             rain_ticker_on,
+            rain_ticker_edge,
             stock_feed: None,
             ticker_bands: Vec::new(),
             ticker_gen: 0,
@@ -283,7 +348,7 @@ impl App {
         self.ticker_frame_accum = 0;
         self.ticker_gen = 0;
         self.rain_ticker_scroll_accum = 0.0;
-        if self.rain_ticker_on {
+        if self.needs_stock_feed() {
             self.ensure_stock_feed();
             if let Some(ref f) = self.stock_feed {
                 f.set_symbols(self.cfg.tickers.clone());
@@ -291,14 +356,18 @@ impl App {
             }
         }
         self.term.clear_screen();
-        self.flash(
-            if self.rain_ticker_on {
-                "rain mode · quote strip on (# toggles)"
-            } else {
-                "rain mode · quote strip off (# toggles)"
-            },
-            t,
-        );
+        let mut note = String::from("rain mode");
+        if self.quotes_in_rain_on {
+            note.push_str(" · quotes in field (k)");
+        }
+        if self.rain_ticker_on {
+            note.push_str(&format!(" · bar {}", self.rain_ticker_edge.as_str()));
+        }
+        self.flash(&note, t);
+    }
+
+    fn needs_stock_feed(&self) -> bool {
+        self.ticker_mode || self.rain_ticker_on || self.quotes_in_rain_on
     }
 
     /// Bottom status row (when `s` status is shown).
@@ -306,23 +375,85 @@ impl App {
         (self.h as isize - 1).max(0)
     }
 
-    /// Rain-mode quote strip: just above the status bar, else on the bottom row.
-    fn rain_ticker_row(&self) -> isize {
-        let bottom = self.status_row();
-        if self.show_status {
-            (bottom - 1).max(0)
-        } else {
-            bottom
-        }
-    }
-
     fn rain_ticker_active(&self) -> bool {
         self.rain_ticker_on && !self.ticker_mode
     }
 
-    /// Single scrolling band of all quotes for rain mode (bottom strip).
+    fn edge_region(&self) -> Option<EdgeRegion> {
+        if !self.rain_ticker_active() {
+            return None;
+        }
+        let w = self.w.saturating_sub(1).max(1) as isize;
+        let status_h = if self.show_status { 1 } else { 0 };
+        let y1 = (self.h as isize - 1 - status_h).max(0);
+        match self.rain_ticker_edge {
+            TickerEdge::Bottom => {
+                let row = y1;
+                Some(EdgeRegion::Horizontal {
+                    row,
+                    x0: 0,
+                    x1: w - 1,
+                })
+            }
+            TickerEdge::Top => Some(EdgeRegion::Horizontal {
+                row: 0,
+                x0: 0,
+                x1: w - 1,
+            }),
+            TickerEdge::Left => Some(EdgeRegion::Vertical {
+                col: 0,
+                y0: 0,
+                y1,
+                width: 1,
+            }),
+            TickerEdge::Right => Some(EdgeRegion::Vertical {
+                col: (w - 1).max(0),
+                y0: 0,
+                y1,
+                width: 1,
+            }),
+        }
+    }
+
+    fn edge_guards_cell(&self, row: isize, x: isize) -> bool {
+        match self.edge_region() {
+            Some(EdgeRegion::Horizontal { row: r, x0, x1 }) => {
+                row == r && x >= x0 && x <= x1
+            }
+            Some(EdgeRegion::Vertical {
+                col,
+                y0,
+                y1,
+                width,
+            }) => row >= y0 && row <= y1 && x >= col && x < col + width,
+            None => false,
+        }
+    }
+
+    /// Column bounds for field messages (avoid overlapping a left/right edge bar).
+    fn message_col_bounds(&self) -> (isize, isize) {
+        let w = self.w.saturating_sub(1).max(1) as isize;
+        match self.edge_region() {
+            Some(EdgeRegion::Vertical {
+                col,
+                width,
+                ..
+            }) if self.rain_ticker_edge == TickerEdge::Left => (col + width + 1, w - 1),
+            Some(EdgeRegion::Vertical { col, .. })
+                if self.rain_ticker_edge == TickerEdge::Right =>
+            {
+                (1, (col - 1).max(1))
+            }
+            _ => (1, w.saturating_sub(1).max(1)),
+        }
+    }
+
+    /// Single scrolling tape of all quotes for the optional edge bar.
     fn rebuild_rain_ticker_strip(&mut self) {
         let Some(ref feed) = self.stock_feed else {
+            return;
+        };
+        let Some(region) = self.edge_region() else {
             return;
         };
         let (mut quotes, _status, gen) = feed.snapshot();
@@ -332,14 +463,21 @@ impl App {
                 .cmp(&b.symbol.to_ascii_uppercase())
         });
 
-        let row = self.rain_ticker_row();
-        let draw_w = self.w.saturating_sub(1).max(1);
+        let (anchor_row, span_len) = match region {
+            EdgeRegion::Horizontal { row, x0, x1 } => (row, (x1 - x0 + 1).max(1) as usize),
+            EdgeRegion::Vertical { y0, y1, .. } => (y0, (y1 - y0 + 1).max(1) as usize),
+        };
 
         let structure_ok = self.ticker_bands.len() == 1
-            && self.ticker_bands[0].row == row
+            && self.ticker_bands[0].row == anchor_row
             && gen == self.ticker_gen
-            && !self.ticker_bands[0].cells.is_empty();
+            && !self.ticker_bands[0].cells.is_empty()
+            && self.ticker_bands[0].cells.len() >= span_len;
         if structure_ok {
+            // Still refresh row if status toggled moved bottom edge.
+            if let EdgeRegion::Horizontal { row, .. } = region {
+                self.ticker_bands[0].row = row;
+            }
             return;
         }
         self.ticker_gen = gen;
@@ -354,10 +492,10 @@ impl App {
                 cells.extend(self.quote_to_cells(q));
             }
         }
-        while cells.len() < draw_w {
+        while cells.len() < span_len {
             cells.push((' ', self.pal.blank));
         }
-        for _ in 0..(draw_w / 4).max(4) {
+        for _ in 0..(span_len / 4).max(4) {
             cells.push((' ', self.pal.blank));
         }
 
@@ -368,7 +506,7 @@ impl App {
             .map(|b| b.offset.rem_euclid(len))
             .unwrap_or(0);
         self.ticker_bands = vec![TickerBand {
-            row,
+            row: anchor_row,
             offset: prev_offset,
             dir: 1,
             cells,
@@ -396,27 +534,112 @@ impl App {
         if !self.rain_ticker_active() {
             return;
         }
-        // Keep layout current if status bar toggled mid-session.
-        if self.ticker_bands.len() != 1
-            || self.ticker_bands.first().map(|b| b.row) != Some(self.rain_ticker_row())
-        {
-            self.rebuild_rain_ticker_strip();
+        self.rebuild_rain_ticker_strip();
+        let Some(region) = self.edge_region() else {
+            return;
+        };
+        let Some(band) = self.ticker_bands.first() else {
+            return;
+        };
+        let n = band.cells.len() as isize;
+        if n == 0 {
+            return;
         }
-        let draw_w = self.w.saturating_sub(1);
         let blank = self.pal.blank;
-        for band in &self.ticker_bands {
-            let n = band.cells.len() as isize;
-            if n == 0 {
-                continue;
+        match region {
+            EdgeRegion::Horizontal { row, x0, x1 } => {
+                let width = (x1 - x0 + 1).max(1) as usize;
+                let spaces = " ".repeat(width);
+                self.term.span_cells(row, x0, blank, &spaces);
+                for i in 0..width {
+                    let idx = (band.offset + i as isize).rem_euclid(n) as usize;
+                    let (ch, style) = band.cells[idx];
+                    self.term.cell(row, x0 + i as isize, style, ch);
+                }
             }
-            let spaces = " ".repeat(draw_w);
-            self.term.span_cells(band.row, 0, blank, &spaces);
-            for x in 0..draw_w {
-                let idx = (band.offset + x as isize).rem_euclid(n) as usize;
-                let (ch, style) = band.cells[idx];
-                self.term.cell(band.row, x as isize, style, ch);
+            EdgeRegion::Vertical {
+                col,
+                y0,
+                y1,
+                width,
+            } => {
+                for row in y0..=y1 {
+                    for dx in 0..width {
+                        let i = (row - y0) + dx * (y1 - y0 + 1);
+                        let idx = (band.offset + i).rem_euclid(n) as usize;
+                        let (ch, style) = band.cells[idx];
+                        self.term.cell(row, col + dx, style, ch);
+                    }
+                }
             }
         }
+    }
+
+    fn clear_edge_region(&mut self) {
+        let Some(region) = self.edge_region() else {
+            return;
+        };
+        let blank = self.pal.blank;
+        match region {
+            EdgeRegion::Horizontal { row, x0, x1 } => {
+                let width = (x1 - x0 + 1).max(1) as usize;
+                self.term
+                    .span_cells(row, x0, blank, &" ".repeat(width));
+            }
+            EdgeRegion::Vertical {
+                col,
+                y0,
+                y1,
+                width,
+            } => {
+                for row in y0..=y1 {
+                    for dx in 0..width {
+                        self.term.cell(row, col + dx, blank, ' ');
+                    }
+                }
+            }
+        }
+    }
+
+    fn format_quote_message(q: &Quote) -> (String, String) {
+        let arrow = if q.direction() > 0 {
+            "▲"
+        } else if q.direction() < 0 {
+            "▼"
+        } else {
+            "═"
+        };
+        let text = format!(
+            "{}  {:.2}  {}{:.2} ({:+.2}%)",
+            q.symbol,
+            q.price,
+            arrow,
+            q.change.abs(),
+            q.change_pct
+        );
+        let kind = match q.direction() {
+            1 => "ticker_up".into(),
+            -1 => "ticker_down".into(),
+            _ => "ticker".into(),
+        };
+        (text, kind)
+    }
+
+    fn next_quote(&mut self) -> Option<Quote> {
+        self.ensure_stock_feed();
+        let Some(ref feed) = self.stock_feed else {
+            return None;
+        };
+        let (quotes, _status, gen) = feed.snapshot();
+        if quotes.is_empty() {
+            return None;
+        }
+        if gen != self.quote_gen || self.quote_q.is_empty() {
+            self.quote_gen = gen;
+            self.quote_q = quotes;
+            self.quote_q.shuffle(&mut rand::thread_rng());
+        }
+        self.quote_q.pop()
     }
 
     /// Wipe the whole field to blank — used so ticker never sits on matrix residue.
@@ -703,7 +926,7 @@ impl App {
         if self.show_status && row == self.status_row() {
             return true;
         }
-        if self.rain_ticker_active() && row == self.rain_ticker_row() {
+        if self.edge_guards_cell(row, x) {
             return true;
         }
         // Modal panels (help, debug, editors, picker) own their rectangle —
@@ -757,19 +980,57 @@ impl App {
         }
         let mut kind = force.map(|s| s.to_string());
         if kind.is_none() {
-            if !(self.news_on || self.poetic_on) {
+            let any = self.news_on || self.poetic_on || self.quotes_in_rain_on;
+            if !any {
                 return;
             }
-            if self.news_on
+            // Quotes first (quotes_ratio), then poetic vs news as before.
+            let want_quote = self.quotes_in_rain_on
+                && rand::thread_rng().gen::<f64>() < self.cfg.quotes_ratio.clamp(0.0, 1.0);
+            if want_quote {
+                kind = Some("ticker".into());
+            } else if self.news_on
                 && (!self.poetic_on || rand::thread_rng().gen::<f64>() > self.cfg.poetic_ratio)
             {
                 kind = Some("news".into());
-            } else {
+            } else if self.poetic_on {
                 kind = Some("poetic".into());
+            } else if self.quotes_in_rain_on {
+                kind = Some("ticker".into());
+            } else if self.news_on {
+                kind = Some("news".into());
+            } else {
+                return;
             }
         }
         let kind_str = kind.as_deref().unwrap_or("poetic");
-        let (text, url, kind_out, domain) = if kind_str == "news" {
+        let (text, url, kind_out, domain) = if kind_str == "ticker" {
+            if let Some(q) = self.next_quote() {
+                let (text, k) = Self::format_quote_message(&q);
+                (text, None, k, q.symbol)
+            } else if force.is_some() {
+                self.flash("quotes not ready yet…", t);
+                return;
+            } else if self.news_on {
+                // Fall through to news if quotes empty mid-refresh.
+                if let Some(item) = self.next_headline() {
+                    let url = if item.url.is_empty() {
+                        None
+                    } else {
+                        Some(item.url.clone())
+                    };
+                    (item.text, url, item.kind, item.domain)
+                } else if self.poetic_on {
+                    (self.pick_poetic(), None, "poetic".into(), String::new())
+                } else {
+                    return;
+                }
+            } else if self.poetic_on {
+                (self.pick_poetic(), None, "poetic".into(), String::new())
+            } else {
+                return;
+            }
+        } else if kind_str == "news" {
             if let Some(item) = self.next_headline() {
                 let url = if item.url.is_empty() {
                     None
@@ -791,11 +1052,24 @@ impl App {
                 }
                 (item.text, url, item.kind, item.domain)
             } else {
-                if kind_str == "news" && !(self.poetic_on || force.is_some()) {
+                if kind_str == "news"
+                    && !(self.poetic_on || self.quotes_in_rain_on || force.is_some())
+                {
                     return;
                 }
-                let text = self.pick_poetic();
-                (text, None, "poetic".into(), String::new())
+                if self.quotes_in_rain_on {
+                    if let Some(q) = self.next_quote() {
+                        let (text, k) = Self::format_quote_message(&q);
+                        (text, None, k, q.symbol)
+                    } else if self.poetic_on || force.is_some() {
+                        (self.pick_poetic(), None, "poetic".into(), String::new())
+                    } else {
+                        return;
+                    }
+                } else {
+                    let text = self.pick_poetic();
+                    (text, None, "poetic".into(), String::new())
+                }
             }
         } else {
             let text = self.pick_poetic();
@@ -803,8 +1077,10 @@ impl App {
         };
 
         let mut text = text;
-        if text.chars().count() > self.w.saturating_sub(6) {
-            let take = self.w.saturating_sub(9);
+        let (x_lo, x_hi) = self.message_col_bounds();
+        let max_chars = ((x_hi - x_lo).max(8) as usize).saturating_sub(2);
+        if text.chars().count() > max_chars {
+            let take = max_chars.saturating_sub(1);
             text = text.chars().take(take).collect::<String>() + "…";
         }
         let taken: std::collections::HashSet<isize> =
@@ -816,13 +1092,12 @@ impl App {
         } else {
             None
         };
-        let ticker_r = if self.rain_ticker_active() {
-            Some(self.rain_ticker_row())
-        } else {
-            None
+        let edge_rows: Vec<isize> = match self.edge_region() {
+            Some(EdgeRegion::Horizontal { row, .. }) => vec![row],
+            _ => Vec::new(),
         };
         let free_row = |r: isize| -> bool {
-            if status_r == Some(r) || ticker_r == Some(r) {
+            if status_r == Some(r) || edge_rows.contains(&r) {
                 return false;
             }
             match panel {
@@ -854,7 +1129,15 @@ impl App {
             .choose(&mut rand::thread_rng())
             .or_else(|| candidates.choose(&mut rand::thread_rng()))
             .unwrap();
-        let mut m = Message::new(text, kind_out, url, row, self.w, t, None, 0.0);
+        // Constrain x so the line sits between left/right edge bars.
+        let avail_w = ((x_hi - x_lo).max(4) + 2) as usize;
+        let mut m = Message::new(text, kind_out, url, row, avail_w, t, None, 0.0);
+        // Message::new places x0 in 1..avail; shift into the free column window.
+        m.x0 = m.x0 + x_lo - 1;
+        let n = m.text.chars().count() as isize;
+        if m.x0 + n > x_hi {
+            m.x0 = (x_hi - n).max(x_lo);
+        }
         m.domain = domain;
         self.messages.push(m);
     }
@@ -1045,18 +1328,32 @@ impl App {
             } else {
                 None
             };
-            let ticker_row = if self.rain_ticker_active() {
-                Some(self.rain_ticker_row())
-            } else {
-                None
-            };
+            let edge = self.edge_region();
             let panel = self.panel_rect;
             let spans = self.spans.clone();
 
             for s in &mut self.streams {
                 let guard_fn = |row: isize, x: isize| -> bool {
-                    if status_row == Some(row) || ticker_row == Some(row) {
+                    if status_row == Some(row) {
                         return true;
+                    }
+                    match edge {
+                        Some(EdgeRegion::Horizontal { row: r, x0, x1 }) => {
+                            if row == r && x >= x0 && x <= x1 {
+                                return true;
+                            }
+                        }
+                        Some(EdgeRegion::Vertical {
+                            col,
+                            y0,
+                            y1,
+                            width,
+                        }) => {
+                            if row >= y0 && row <= y1 && x >= col && x < col + width {
+                                return true;
+                            }
+                        }
+                        None => {}
                     }
                     if let Some((y0, x0, y1, x1)) = panel {
                         if y0 <= row && row <= y1 && x0 <= x && x <= x1 {
@@ -1160,11 +1457,15 @@ impl App {
         }
 
         let dim = self.pal.dim;
-        // Prefer the status row; if the quote strip owns the bottom, toast sits there.
+        // Prefer the status row; else the bottom edge bar; else the last row.
         let row = if self.show_status {
             self.status_row()
-        } else if self.rain_ticker_active() {
-            self.rain_ticker_row()
+        } else if let Some(EdgeRegion::Horizontal { row, .. }) = self.edge_region() {
+            if self.rain_ticker_edge == TickerEdge::Bottom {
+                row
+            } else {
+                self.status_row()
+            }
         } else {
             self.status_row()
         };
@@ -1847,6 +2148,14 @@ impl App {
             } else {
                 self.spawn_message(t, Some("poetic"));
             }
+        } else if b == b'y' {
+            if self.ticker_mode {
+                self.flash("ticker mode — $ for rain", t);
+            } else if !self.quotes_in_rain_on {
+                self.flash("quotes in rain off · k to enable", t);
+            } else {
+                self.spawn_message(t, Some("ticker"));
+            }
         } else if b == b'f' {
             self.focus = !self.focus;
             self.cfg.focus = self.focus;
@@ -1891,6 +2200,24 @@ impl App {
                 },
                 t,
             );
+        } else if b == b'k' {
+            if self.ticker_mode {
+                self.flash("k is for quotes in rain · $ returns to rain", t);
+            } else {
+                self.quotes_in_rain_on = !self.quotes_in_rain_on;
+                self.cfg.quotes_in_rain = self.quotes_in_rain_on;
+                save_config(&self.cfg);
+                if self.quotes_in_rain_on {
+                    self.ensure_stock_feed();
+                    if let Some(ref f) = self.stock_feed {
+                        f.set_symbols(self.cfg.tickers.clone());
+                        f.wake();
+                    }
+                    self.flash("quotes in rain on — mixed with news & poems", t);
+                } else {
+                    self.flash("quotes in rain off", t);
+                }
+            }
         } else if b == b'+' || b == b'=' {
             if self.ticker_mode {
                 if self.ticker_speed_idx + 1 < TICKER_FRAMES_PER_STEP.len() {
@@ -1935,7 +2262,7 @@ impl App {
                 self.flash("refreshing quotes…", t);
             } else {
                 self.feed.wake();
-                if self.rain_ticker_on {
+                if self.needs_stock_feed() {
                     if let Some(ref f) = self.stock_feed {
                         f.wake();
                     }
@@ -1955,9 +2282,11 @@ impl App {
             }
         } else if b == b'#' {
             if self.ticker_mode {
-                self.flash("# is for rain quote strip · $ returns to rain", t);
+                self.flash("# is for edge ticker bar · $ returns to rain", t);
             } else {
-                let strip_row = self.rain_ticker_row();
+                if self.rain_ticker_on {
+                    self.clear_edge_region();
+                }
                 self.rain_ticker_on = !self.rain_ticker_on;
                 self.cfg.rain_ticker = self.rain_ticker_on;
                 save_config(&self.cfg);
@@ -1968,12 +2297,40 @@ impl App {
                         f.wake();
                     }
                     self.ticker_gen = 0;
-                    self.flash("rain ticker on", t);
+                    self.flash(
+                        &format!("edge bar on · {} · @ cycles", self.rain_ticker_edge.as_str()),
+                        t,
+                    );
                 } else {
                     self.ticker_bands.clear();
-                    self.clear_row(strip_row);
-                    self.flash("rain ticker off", t);
+                    self.flash("edge bar off", t);
                 }
+            }
+        } else if b == b'@' {
+            if self.ticker_mode {
+                self.flash("@ cycles edge bar placement in rain mode", t);
+            } else {
+                if self.rain_ticker_on {
+                    self.clear_edge_region();
+                }
+                self.rain_ticker_edge = self.rain_ticker_edge.next();
+                self.cfg.rain_ticker_edge = self.rain_ticker_edge.as_str().into();
+                save_config(&self.cfg);
+                self.ticker_gen = 0;
+                if !self.rain_ticker_on {
+                    self.rain_ticker_on = true;
+                    self.cfg.rain_ticker = true;
+                    save_config(&self.cfg);
+                    self.ensure_stock_feed();
+                    if let Some(ref f) = self.stock_feed {
+                        f.set_symbols(self.cfg.tickers.clone());
+                        f.wake();
+                    }
+                }
+                self.flash(
+                    &format!("edge bar · {}", self.rain_ticker_edge.as_str()),
+                    t,
+                );
             }
         } else if b == b'd' {
             if self.ticker_mode {
@@ -2010,7 +2367,7 @@ impl App {
         if self.ticker_mode {
             self.enter_ticker_mode(0.0);
         } else {
-            if self.rain_ticker_on {
+            if self.needs_stock_feed() {
                 self.ensure_stock_feed();
                 if let Some(ref f) = self.stock_feed {
                     f.set_symbols(self.cfg.tickers.clone());
