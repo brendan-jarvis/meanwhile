@@ -936,11 +936,10 @@ impl App {
                 return true;
             }
         }
-        if let Some(spans) = self.spans.get(&row) {
-            for &(lo, hi) in spans {
-                if lo <= x && x <= hi {
-                    return true;
-                }
+        // Phase-aware: only settled message ink blocks residue/streams.
+        for m in &self.messages {
+            if m.row == row && m.guards_stream_cell(x) {
+                return true;
             }
         }
         false
@@ -1139,7 +1138,51 @@ impl App {
             m.x0 = (x_hi - n).max(x_lo);
         }
         m.domain = domain;
+        // Ensure a write-ray will cross this row (spawn if none approaching).
+        self.ensure_ray_for_message(m.row, m.x0, false);
         self.messages.push(m);
+    }
+
+    /// Keep a stream on `row` whose head is still left of the message so it will strike.
+    fn ensure_ray_for_message(&mut self, row: isize, x0: isize, eraser: bool) {
+        let approaching = self.streams.iter().any(|s| {
+            s.row == row
+                && s.is_eraser() == eraser
+                && s.head_col() < x0 + 2
+                && !s.dead(self.w)
+        });
+        if approaching {
+            return;
+        }
+        // Prefer repurposing a dead-ish row; otherwise add a dedicated sweep.
+        self.streams
+            .push(Noise::sweeping_row(row, self.w, eraser, x0));
+    }
+
+    fn apply_stream_rays(&mut self, t: f64) {
+        // Snapshot stream heads so we don't fight the borrow checker with messages.
+        let rays: Vec<(isize, isize, bool)> = self
+            .streams
+            .iter()
+            .map(|s| (s.row, s.head_col(), s.is_eraser()))
+            .collect();
+        for m in &mut self.messages {
+            for &(row, col, eraser) in &rays {
+                if row == m.row {
+                    m.hit_by_ray(t, col, eraser);
+                }
+            }
+        }
+        // After dwell, request a wipe ray on that row.
+        let wipe_targets: Vec<(isize, isize)> = self
+            .messages
+            .iter()
+            .filter(|m| m.wants_wipe_ray())
+            .map(|m| (m.row, m.x0))
+            .collect();
+        for (row, x0) in wipe_targets {
+            self.ensure_ray_for_message(row, x0, true);
+        }
     }
 
     fn pick_poetic(&mut self) -> String {
@@ -1243,9 +1286,13 @@ impl App {
             for s in &mut self.streams {
                 s.update(dt, mult);
             }
+            // Rain heads write / wipe messages as they cross each line.
+            self.apply_stream_rays(t);
             for m in &mut self.messages {
                 m.update(t, dt, mult);
             }
+            // Dwell may have just flipped to awaiting_wipe — spawn erasers.
+            self.apply_stream_rays(t);
             if t >= self.next_msg {
                 self.spawn_message(t, None);
                 self.next_msg =
@@ -1322,7 +1369,7 @@ impl App {
                 }
             }
 
-            // Shared guard snapshot for this frame (one small clone, not per stream).
+            // Shared guard snapshot for this frame.
             let status_row = if self.show_status {
                 Some(self.status_row())
             } else {
@@ -1330,7 +1377,19 @@ impl App {
             };
             let edge = self.edge_region();
             let panel = self.panel_rect;
-            let spans = self.spans.clone();
+            // Phase-aware: streams may paint the scramble front; settled ink is guarded.
+            // Snapshot guard decisions so we don't need to borrow messages while drawing.
+            let mut locked: HashMap<isize, Vec<(isize, isize)>> = HashMap::new();
+            for m in &self.messages {
+                let n = m.text.chars().count() as isize;
+                let (lo, hi) = m.span_range();
+                for x in lo..=hi {
+                    if m.guards_stream_cell(x) {
+                        locked.entry(m.row).or_default().push((x, x));
+                    }
+                }
+                let _ = n;
+            }
 
             for s in &mut self.streams {
                 let guard_fn = |row: isize, x: isize| -> bool {
@@ -1360,9 +1419,9 @@ impl App {
                             return true;
                         }
                     }
-                    if let Some(ss) = spans.get(&row) {
-                        for &(lo, hi) in ss {
-                            if lo <= x && x <= hi {
+                    if let Some(cols) = locked.get(&row) {
+                        for &(a, b) in cols {
+                            if x >= a && x <= b {
                                 return true;
                             }
                         }

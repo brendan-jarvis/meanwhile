@@ -405,6 +405,8 @@ meanwhile --check-feeds -v --places "New Zealand"
   meanwhile so it works under WezTerm mouse tracking). OSC 8 is still emitted
   as a bonus for terminals that honour it.
 - Help and other popups stay opaque while the rain keeps moving behind them.
+- News, poems, and quotes are **written and wiped by the rain cursor** as a
+  stream head crosses their row (not a separate fade timer alone).
 - Rain defaults are tuned for multi-pane use (~8 fps, modest density).
 - Every so often — not often — the rain has something to say to you
   directly. If you're impatient, you know whose name to type.
