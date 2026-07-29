@@ -197,10 +197,11 @@ impl Noise {
     }
 }
 
-/// A headline, poetic line, or quote that decodes out of the field, lingers, dissolves.
+/// A headline, poetic line, quote, or story block that lives in the rain field.
 ///
-/// Ambient lines (`ray_coupled`) are written/wiped by rain-stream heads.
-/// Click-expanded story blocks skip the ray and use timed reveal/erase.
+/// Write and wipe are driven by rain-stream heads (`hit_by_ray`) so the cursor
+/// rewrites glyphs as it crosses. Click-expanded stories may skip the write
+/// ray (`finish_reveal`) but still wipe via a later rain pass.
 pub struct Message {
     pub text: String,
     pub kind: String,
@@ -217,11 +218,8 @@ pub struct Message {
     erase: f64,
     pub dwell: f64,
     pub done: bool,
-    /// True once dwell ended and we're waiting for a wipe ray (or timeout).
+    /// True once dwell ended and we're waiting for a wipe ray.
     awaiting_wipe: bool,
-    /// When true, rain heads drive reveal/erase. When false (story expand), timed.
-    pub ray_coupled: bool,
-    speed: f64,
     /// Avoid re-emitting OSC 8 hyperlinks every frame while dwelling.
     link_painted: bool,
     /// Last integer reveal/erase head so we only repaint when it advances.
@@ -261,14 +259,12 @@ impl Message {
             x0,
             phase: Phase::Reveal,
             phase_start: t,
-            // Ambient: unrevealed until a write-ray strikes.
+            // Unrevealed until a write-ray strikes (or finish_reveal).
             head: 0.0,
             erase: 0.0,
             dwell: 3.5 + 0.05 * text_len as f64,
             done: false,
             awaiting_wipe: false,
-            ray_coupled: true,
-            speed: rng.gen_range(32.0..48.0),
             link_painted: false,
             last_drawn_head: i32::MIN,
         }
@@ -278,7 +274,7 @@ impl Message {
         self.text.chars().count() as f64
     }
 
-    /// Instant full reveal (click-expand story blocks — no rain ray wait).
+    /// Instant full reveal (click-expand) — wipe still waits for a rain pass.
     pub fn finish_reveal(&mut self, t: f64) {
         let n = self.text_len_f();
         self.head = n + SCRAMBLE as f64;
@@ -288,13 +284,16 @@ impl Message {
         self.link_painted = false;
     }
 
-    /// Drop immediately; caller should heal the row with residue.
-    pub fn finish_dismiss(&mut self) {
-        self.done = true;
+    /// Start a ray wipe from the left (esc / re-click). Does not vanish instantly.
+    pub fn begin_wipe(&mut self, t: f64) {
+        if self.done {
+            return;
+        }
         self.phase = Phase::Erase;
         self.awaiting_wipe = false;
+        self.phase_start = t;
+        self.erase = 0.0;
         self.link_painted = false;
-        self.erase = self.text_len_f() + SCRAMBLE as f64;
     }
 
     pub fn span_range(&self) -> (isize, isize) {
@@ -303,7 +302,7 @@ impl Message {
     }
 
     /// Columns the stream paint should not overwrite (settled message ink).
-    /// The ray head column itself is left free so the bright cursor can sit on the text.
+    /// Wiped columns are left free so the rain cursor can rewrite them as code.
     pub fn guards_stream_cell(&self, x: isize) -> bool {
         let n = self.text.chars().count() as isize;
         let lo = self.x0 - 1;
@@ -313,17 +312,15 @@ impl Message {
         }
         match self.phase {
             Phase::Reveal => {
-                // Only guard fully locked characters behind the scramble front.
                 let locked = ((self.head as isize) - SCRAMBLE as isize).clamp(0, n);
                 if locked <= 0 {
                     return false;
                 }
-                // Space before first char + locked glyphs.
                 x >= lo && x < self.x0 + locked
             }
             Phase::Dwell => true,
             Phase::Erase => {
-                // Guard remaining (not yet wiped) text.
+                // Only remaining (not yet wiped) text is protected.
                 let gone = ((self.erase as isize) - SCRAMBLE as isize).clamp(0, n);
                 x >= self.x0 + gone && x <= hi
             }
@@ -332,9 +329,6 @@ impl Message {
 
     /// Advance reveal/erase from a rain stream whose head is at world column `col`.
     pub fn hit_by_ray(&mut self, t: f64, col: isize, eraser: bool) {
-        if !self.ray_coupled {
-            return;
-        }
         let n = self.text.chars().count() as i32;
         // Progress through the message: 1 when the ray is on the first character.
         let progress = (col - self.x0 + 1) as f64;
@@ -348,7 +342,6 @@ impl Message {
                 if eraser {
                     return;
                 }
-                // Only advance when the ray is over or past the message body.
                 if progress > self.head {
                     self.head = progress;
                 }
@@ -359,11 +352,11 @@ impl Message {
                 }
             }
             Phase::Dwell => {
-                // Only accept a wipe ray after the dwell timer (first pass wrote it).
+                // Wipe ray only after dwell (first pass wrote / expand settled).
                 if !self.awaiting_wipe {
                     return;
                 }
-                // Any ray starts the wipe (erasers preferred thematically but writers work).
+                // Any ray rewrites the line (erasers or writers).
                 if progress >= -1.0 && progress <= n as f64 + SCRAMBLE as f64 + 2.0 {
                     self.phase = Phase::Erase;
                     self.awaiting_wipe = false;
@@ -373,6 +366,7 @@ impl Message {
                 }
             }
             Phase::Erase => {
+                // Ray overwrites: erase front follows the stream head.
                 if progress > self.erase {
                     self.erase = progress;
                 }
@@ -383,44 +377,15 @@ impl Message {
         }
     }
 
-    /// Dwell timer + timed reveal/erase (always for story blocks; fallback for rays).
-    pub fn update(&mut self, t: f64, dt: f64, mult: f64) {
+    /// Dwell timer + soft fallbacks. Reveal/wipe progress is primarily from rays.
+    pub fn update(&mut self, t: f64, dt: f64, _mult: f64) {
         let n = self.text_len_f();
         let scramble = SCRAMBLE as f64;
-
-        if !self.ray_coupled {
-            // Classic timed write / dwell / wipe — used for click-expand blocks.
-            match self.phase {
-                Phase::Reveal => {
-                    self.head += self.speed * mult * dt;
-                    if self.head >= n + scramble {
-                        self.phase = Phase::Dwell;
-                        self.phase_start = t;
-                        self.head = n + scramble;
-                    }
-                }
-                Phase::Dwell => {
-                    if t - self.phase_start >= self.dwell {
-                        self.phase = Phase::Erase;
-                        self.phase_start = t;
-                        self.erase = 0.0;
-                        self.link_painted = false;
-                    }
-                }
-                Phase::Erase => {
-                    self.erase += self.speed * 1.8 * mult * dt;
-                    if self.erase >= n + scramble {
-                        self.done = true;
-                    }
-                }
-            }
-            return;
-        }
 
         match self.phase {
             Phase::Reveal => {
                 // If no stream ever hits this row, finish after a wait.
-                if t - self.phase_start > 10.0 {
+                if t - self.phase_start > 12.0 {
                     self.head = n + scramble;
                     self.phase = Phase::Dwell;
                     self.phase_start = t;
@@ -429,20 +394,19 @@ impl Message {
             Phase::Dwell => {
                 if t - self.phase_start >= self.dwell {
                     self.awaiting_wipe = true;
-                    // Don't stick forever waiting for a wipe ray.
-                    if t - self.phase_start >= self.dwell + 4.0 {
-                        self.phase = Phase::Erase;
-                        self.awaiting_wipe = false;
-                        self.phase_start = t;
-                        self.erase = 0.0;
-                        self.link_painted = false;
-                    }
+                }
+                // Still no wipe ray after a long time — start erase so a
+                // slow drip can finish, but prefer spawning a wipe ray first.
+                if self.awaiting_wipe && t - self.phase_start >= self.dwell + 10.0 {
+                    self.begin_wipe(t);
                 }
             }
             Phase::Erase => {
-                // Once wipe has started, always advance by time so text never sticks
-                // waiting for another rain pass (ray still accelerates if it hits).
-                self.erase += self.speed * 1.6 * mult * dt;
+                // Prefer ray progress. Only drip slowly if the wipe has stalled
+                // so text is never immortal when streams miss the row.
+                if t - self.phase_start > 2.5 {
+                    self.erase += 5.0 * dt;
+                }
                 if self.erase >= n + scramble {
                     self.done = true;
                 }
@@ -450,9 +414,11 @@ impl Message {
         }
     }
 
-    /// True when dwell is done and we want an eraser stream to cross this row.
+    /// True when dwell is done and we want a stream to rewrite this row.
     pub fn wants_wipe_ray(&self) -> bool {
-        self.ray_coupled && self.awaiting_wipe && self.phase == Phase::Dwell && !self.done
+        !self.done
+            && (self.awaiting_wipe && self.phase == Phase::Dwell
+                || self.phase == Phase::Erase && self.erase < self.text_len_f())
     }
 
     pub fn draw(&mut self, term: &mut Term, t: f64, pal: &Palette, glyphs: &Glyphs) {

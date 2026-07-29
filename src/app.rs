@@ -1173,7 +1173,7 @@ impl App {
                 }
             }
         }
-        // After dwell, request a wipe ray on that row.
+        // After dwell (or mid-wipe), ensure a write-ray will rewrite the row as code.
         let wipe_targets: Vec<(isize, isize)> = self
             .messages
             .iter()
@@ -1181,7 +1181,8 @@ impl App {
             .map(|m| (m.row, m.x0))
             .collect();
         for (row, x0) in wipe_targets {
-            self.ensure_ray_for_message(row, x0, true);
+            // Writer streams leave code glyphs — a true ray rewrite, not a hard delete.
+            self.ensure_ray_for_message(row, x0, false);
         }
     }
 
@@ -1699,7 +1700,7 @@ impl App {
 
         self.block_seq += 1;
         let group = self.block_seq;
-        // Story blocks linger, then wipe on a timer — no rain-ray wait.
+        // Appear immediately; after dwell a write-ray rewrites them as rain.
         let dwell = 7.0 + 0.02 * summary.len() as f64;
         for (i, (text, kind)) in block.into_iter().enumerate() {
             let row = r0 + i as isize;
@@ -1724,8 +1725,7 @@ impl App {
             m.domain = art.domain.clone();
             m.group = Some(group);
             m.dwell = dwell;
-            m.ray_coupled = false;
-            // Appear immediately — do not wait for a write-ray.
+            // Skip write-ray wait; wipe still uses a rain pass.
             m.finish_reveal(t);
             self.messages.push(m);
             heal.remove(&row);
@@ -1746,32 +1746,42 @@ impl App {
     }
 
     fn dismiss_summaries(&mut self, group: Option<u64>, t: f64) {
-        let mut heal = std::collections::HashSet::new();
+        // Start a ray rewrite — do not hard-delete; spawn write-rays to overwrite.
+        let mut targets = Vec::new();
         for m in &mut self.messages {
             if m.group.is_some() && (group.is_none() || m.group == group) {
-                heal.insert(m.row);
-                m.finish_dismiss();
+                m.begin_wipe(t);
+                targets.push((m.row, m.x0));
             }
         }
-        self.reap_messages(t);
-        for row in heal {
-            self.fill_row_residue(row, t);
+        for (row, x0) in targets {
+            self.ensure_ray_for_message(row, x0, false);
         }
     }
 
-    /// Drop finished messages and paint residue where their ink lived.
+    /// Drop finished messages. Erase draw already left residue as the ray advanced,
+    /// so we only lightly heal the message span if anything was left blank.
     fn reap_messages(&mut self, t: f64) {
-        let mut heal = std::collections::HashSet::new();
-        self.messages.retain(|m| {
-            if m.done {
-                heal.insert(m.row);
-                false
-            } else {
-                true
+        let finished: Vec<(isize, isize, isize)> = self
+            .messages
+            .iter()
+            .filter(|m| m.done)
+            .map(|m| {
+                let (lo, hi) = m.span_range();
+                (m.row, lo, hi)
+            })
+            .collect();
+        self.messages.retain(|m| !m.done);
+        for (row, lo, hi) in finished {
+            // Touch only the span the message owned — not the whole row.
+            if row < 0 || row as usize >= self.h {
+                continue;
             }
-        });
-        for row in heal {
-            self.fill_row_residue(row, t);
+            let max_x = self.w.saturating_sub(1) as isize;
+            for x in lo.max(0)..=hi.min(max_x - 1) {
+                let (style, ch) = residue_at(row, x, t, &self.glyphs, &self.pal);
+                self.term.cell(row, x, style, ch);
+            }
         }
     }
 
