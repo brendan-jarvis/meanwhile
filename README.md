@@ -39,32 +39,45 @@ This is a **Rust port and continuation** of the original project:
 <details>
 <summary><strong>What’s different in this fork</strong></summary>
 
-Compared with the original Python prototype:
+Compared with the original Python prototype (and recent upstream where it
+diverges):
 
+**Core**
 - **Rust rewrite** — single native binary, no Python runtime; lower steady-state
   CPU for long-running ambient use (especially multi-pane terminals).
 - **RSS/Atom-first news** — headlines from open feeds (plus a few free JSON
-  APIs). No search API key required for the rain itself; optional Exa remains
-  available only for richer click-to-summarize when configured.
+  APIs). No search API key required for the rain itself; optional Exa only for
+  richer click-to-summarize when configured.
 - **Broader place → national feed maps** — more outlets per country/region
   (e.g. RNZ/Stuff, BBC packs, NHK, CBC, …) and Hacker News top-of-day.
 - **Feed diagnostics** — `--check-feeds` / verbose fetch logging so broken or
   blocked sources are debuggable.
-- **Terminal theme inheritance** — pulls colours from WezTerm, Starship, OSC,
-  and Omarchy-style environments instead of a fixed matrix palette only.
-- **Quotes in rain + edge bar + pure ticker** — interspersed quotes (`k`),
-  optional edge bar (`#` / `@` for placement), full-screen `$` / `--ticker`.
-- **Input / mouse hardening** — cleaner exit from raw mode and mouse tracking;
-  shift-click opens the article URL in the browser even when OSC-8 is flaky.
-- **Modal occlusion** — help and other panels stay opaque while the rain
-  keeps moving behind them (glyphs never paint through the UI).
-- **Performance path** — dirty frame buffer, lower default density/fps options,
-  less full-screen redraw work for WezTerm splits and similar PTYs.
+- **Terminal theme inheritance** — WezTerm / Starship / OSC / Omarchy palettes,
+  not only matrix green.
+
+**Field & interaction**
+- **Rain writes and rewrites the field** — headlines, poems, and quotes are
+  revealed and later overwritten as stream heads cross their row (click-expanded
+  stories appear immediately, then wipe the same way).
+- **Quotes in the rain** — stock lines mixed among news and poems (`k` / `y`,
+  `quotes_in_rain` + `quotes_ratio`); S&P universe via Yahoo (no API key).
+- **Optional edge marquee** — dedicated tape on **top / bottom / left / right**
+  (`#` toggle, `@` cycles placement).
+- **Pure full-screen ticker** — `$` / `--ticker` multi-row S&P marquee with no
+  matrix field (session toggle; does not stick launch mode).
+- **Live rain under modals** — help/editors stay opaque while the field keeps
+  moving behind them.
+- **Click without a blurb** — toast only (`no blurb · shift-click to open`);
+  no fake story text painted into the rain.
+
+**Distribution & extras**
 - **Prebuilt GitHub Releases** — Linux and macOS archives so people can run
   without a local `cargo build` (Windows via WSL).
 - **`--saver`** — cmatrix-style screensaver; any real key or click exits.
-- **Update whisper** — optional cached GitHub release check (opt out with
-  `check_updates: false` in config).
+- **Update whisper** — optional cached check of this repo’s releases
+  (`check_updates` in config).
+- **Performance path** — dirty frame buffer and quieter defaults for WezTerm
+  splits and similar PTYs.
 
 The original AUR package name (`meanwhile-rain`) and the core ambient idea —
 news and poetic lines in horizontal matrix rain — remain the same lineage.
@@ -315,7 +328,9 @@ code. Press `f` for **focus** and headlines surface in full contrast when
 you actually want to read the world. The preference sticks.
 
 Click any headline (or press `enter` to pick one) and its story expands
-**from that line** into a short summary — you never leave the rain:
+**from that line** into a short summary when the feed has a blurb — you never
+leave the rain. The block appears at once; when it leaves, a rain stream
+rewrites it as code. No blurb? A short toast; **shift-click** opens the URL.
 
 ![summary](shots/summary.png)
 
@@ -408,8 +423,8 @@ meanwhile --check-feeds -v --places "New Zealand"
   opens the browser** (handled by meanwhile so it works under WezTerm mouse
   tracking). OSC 8 is still emitted as a bonus for terminals that honour it.
 - Help and other popups stay opaque while the rain keeps moving behind them.
-- News, poems, and quotes are **written and wiped by the rain cursor** as a
-  stream head crosses their row (not a separate fade timer alone).
+- Field text is **written and rewritten by rain streams** as heads cross each
+  row (ambient lines and story teardown).
 - Rain defaults are tuned for multi-pane use (~8 fps, modest density).
 - Every so often — not often — the rain has something to say to you
   directly. If you're impatient, you know whose name to type.
