@@ -664,9 +664,25 @@ impl App {
         }
         let taken: std::collections::HashSet<isize> =
             self.messages.iter().map(|m| m.row).collect();
+        // Prefer rows outside an open modal so new headlines aren't invisible.
+        let panel = self.panel_rect;
+        let free_of_panel = |r: isize| -> bool {
+            match panel {
+                Some((y0, _, y1, _)) => r < y0 || r > y1,
+                None => true,
+            }
+        };
         let candidates: Vec<isize> = (1..(self.h as isize - 2))
-            .filter(|r| !taken.contains(r))
+            .filter(|r| !taken.contains(r) && free_of_panel(*r))
             .collect();
+        let candidates = if candidates.is_empty() {
+            // Fall back if the panel covers almost every row.
+            (1..(self.h as isize - 2))
+                .filter(|r| !taken.contains(r))
+                .collect()
+        } else {
+            candidates
+        };
         if candidates.is_empty() {
             return;
         }
@@ -755,7 +771,8 @@ impl App {
 
     fn tick(&mut self, t: f64, dt: f64) {
         if self.ticker_mode {
-            if !self.panel_open() && !self.paused {
+            // Keep the marquee moving under modals; draw still paints the panel last.
+            if !self.paused {
                 self.tick_ticker(dt);
             }
             return;
@@ -764,16 +781,17 @@ impl App {
             self.tick_wake(t, dt);
             return;
         }
-        // Freeze the rain under modal popups so nothing advances into them.
-        if self.panel_open() {
+        // Don't start the wake sequence while a panel is up (it would steal the UI).
+        if !self.panel_open() && rand::thread_rng().gen::<f64>() < dt / 3600.0 {
+            self.trigger_wake(t);
             return;
         }
-        if rand::thread_rng().gen::<f64>() < dt / 3600.0 {
-            self.trigger_wake(t);
+        if self.paused {
             return;
         }
         let mult = self.cfg.speed;
         // Density-scaled streams with a hard cap so large splits stay quiet.
+        // Keep spawning under modals so the field doesn't thin while help is open.
         let target = 4
             .max((self.h as f64 * self.cfg.density * 1.1) as usize)
             .min(20);
@@ -845,9 +863,9 @@ impl App {
             self.panel_rect = None;
         }
 
-        // While a modal is up, freeze the field: no residue, streams, or
-        // headlines paint — only the panel (drawn last) may touch those cells.
-        if !self.paused && !self.panel_open() {
+        // Keep the field alive under modals. Streams/residue/headlines never
+        // paint inside `panel_rect` (guard), and the panel is drawn last.
+        if !self.paused {
             // Very sparse settled-field sparkle (a handful of cells per frame).
             let n = 3.max((self.w * self.h) / 1200).min(12);
             let mut rng = rand::thread_rng();
@@ -897,8 +915,8 @@ impl App {
             self.streams.retain(|s| !s.dead(self.w));
 
             for m in &mut self.messages {
-                // Never let a headline paint through a modal, even if panel_open
-                // races with a late message.
+                // Skip headlines that intersect the modal so glyphs never show
+                // through the panel (partial clip would need per-cell paint).
                 if let Some((y0, x0, y1, x1)) = self.panel_rect {
                     let (lo, hi) = m.span_range();
                     if m.row >= y0 && m.row <= y1 && !(hi < x0 || lo > x1) {

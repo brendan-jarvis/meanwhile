@@ -56,8 +56,8 @@ Compared with the original Python prototype:
   matrix field; session-only toggle (does not stick config on launch).
 - **Input / mouse hardening** — cleaner exit from raw mode and mouse tracking;
   shift-click opens the article URL in the browser even when OSC-8 is flaky.
-- **Modal occlusion** — help and other panels paint over a frozen rain field
-  so glyphs don’t draw through the UI.
+- **Modal occlusion** — help and other panels stay opaque while the rain
+  keeps moving behind them (glyphs never paint through the UI).
 - **Performance path** — dirty frame buffer, lower default density/fps options,
   less full-screen redraw work for WezTerm splits and similar PTYs.
 - **Prebuilt GitHub Releases** — Linux and macOS archives so people can run
@@ -373,7 +373,7 @@ meanwhile --check-feeds -v --places "New Zealand"
 - Plain click decodes in-app; **shift-click opens the browser** (handled by
   meanwhile so it works under WezTerm mouse tracking). OSC 8 is still emitted
   as a bonus for terminals that honour it.
-- Help and other popups freeze the field — nothing paints through them.
+- Help and other popups stay opaque while the rain keeps moving behind them.
 - Rain defaults are tuned for multi-pane use (~8 fps, modest density).
 - Every so often — not often — the rain has something to say to you
   directly. If you're impatient, you know whose name to type.
