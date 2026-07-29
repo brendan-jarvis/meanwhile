@@ -181,9 +181,14 @@ pub struct App {
     /// Shuffled quote queue for interspersed rain messages.
     quote_q: Vec<Quote>,
     quote_gen: u64,
+    /// (message, until_monotonic). Painted as solid chrome, never over rain cells.
     toast: (String, f64),
+    /// Last painted toast span (row, x0, x1 inclusive) — healed when toast ends.
+    toast_span: Option<(isize, isize, isize)>,
     /// Soft update whisper: (message, until_monotonic, url).
     update_hint: (String, f64, String),
+    /// Last painted update-hint span for clean expiry.
+    hint_span: Option<(isize, isize, isize)>,
     spans: HashMap<isize, Vec<(isize, isize)>>,
     /// Pure stock marquee — no matrix field at all.
     ticker_mode: bool,
@@ -288,7 +293,9 @@ impl App {
             quote_q: Vec::new(),
             quote_gen: 0,
             toast: (String::new(), 0.0),
+            toast_span: None,
             update_hint: (String::new(), 0.0, String::new()),
+            hint_span: None,
             spans: HashMap::new(),
             ticker_mode,
             rain_ticker_on,
@@ -370,9 +377,24 @@ impl App {
         self.ticker_mode || self.rain_ticker_on || self.quotes_in_rain_on
     }
 
-    /// Bottom status row (when `s` status is shown).
+    /// Bottom chrome row (status / toast / update whisper).
     fn status_row(&self) -> isize {
         (self.h as isize - 1).max(0)
+    }
+
+    /// Footer chrome is reserved so rain cannot punch holes in toasts.
+    fn footer_chrome_active(&self, t: f64) -> bool {
+        self.show_status || self.toast_active(t) || self.hint_active(t)
+    }
+
+    fn toast_active(&self, t: f64) -> bool {
+        let (ref msg, until) = self.toast;
+        !msg.is_empty() && t < until
+    }
+
+    fn hint_active(&self, t: f64) -> bool {
+        let (ref hint, until, _) = self.update_hint;
+        !hint.is_empty() && t < until
     }
 
     fn rain_ticker_active(&self) -> bool {
@@ -380,21 +402,23 @@ impl App {
     }
 
     fn edge_region(&self) -> Option<EdgeRegion> {
+        self.edge_region_at(monotonic())
+    }
+
+    fn edge_region_at(&self, t: f64) -> Option<EdgeRegion> {
         if !self.rain_ticker_active() {
             return None;
         }
         let w = self.w.saturating_sub(1).max(1) as isize;
-        let status_h = if self.show_status { 1 } else { 0 };
-        let y1 = (self.h as isize - 1 - status_h).max(0);
+        // Keep bottom edge bar off the toast/status chrome row.
+        let footer = if self.footer_chrome_active(t) { 1 } else { 0 };
+        let y1 = (self.h as isize - 1 - footer).max(0);
         match self.rain_ticker_edge {
-            TickerEdge::Bottom => {
-                let row = y1;
-                Some(EdgeRegion::Horizontal {
-                    row,
-                    x0: 0,
-                    x1: w - 1,
-                })
-            }
+            TickerEdge::Bottom => Some(EdgeRegion::Horizontal {
+                row: y1,
+                x0: 0,
+                x1: w - 1,
+            }),
             TickerEdge::Top => Some(EdgeRegion::Horizontal {
                 row: 0,
                 x0: 0,
@@ -923,8 +947,18 @@ impl App {
     }
 
     fn guard(&self, row: isize, x: isize) -> bool {
-        if self.show_status && row == self.status_row() {
+        if self.footer_chrome_active(monotonic()) && row == self.status_row() {
             return true;
+        }
+        if let Some((r, x0, x1)) = self.toast_span {
+            if row == r && x >= x0 && x <= x1 {
+                return true;
+            }
+        }
+        if let Some((r, x0, x1)) = self.hint_span {
+            if row == r && x >= x0 && x <= x1 {
+                return true;
+            }
         }
         if self.edge_guards_cell(row, x) {
             return true;
@@ -1086,17 +1120,17 @@ impl App {
             self.messages.iter().map(|m| m.row).collect();
         // Prefer rows outside an open modal / reserved chrome so headlines stay visible.
         let panel = self.panel_rect;
-        let status_r = if self.show_status {
+        let footer_r = if self.footer_chrome_active(t) {
             Some(self.status_row())
         } else {
             None
         };
-        let edge_rows: Vec<isize> = match self.edge_region() {
+        let edge_rows: Vec<isize> = match self.edge_region_at(t) {
             Some(EdgeRegion::Horizontal { row, .. }) => vec![row],
             _ => Vec::new(),
         };
         let free_row = |r: isize| -> bool {
-            if status_r == Some(r) || edge_rows.contains(&r) {
+            if footer_r == Some(r) || edge_rows.contains(&r) {
                 return false;
             }
             match panel {
@@ -1371,12 +1405,14 @@ impl App {
             }
 
             // Shared guard snapshot for this frame.
-            let status_row = if self.show_status {
+            let footer_row = if self.footer_chrome_active(t) {
                 Some(self.status_row())
             } else {
                 None
             };
-            let edge = self.edge_region();
+            let toast_span = self.toast_span;
+            let hint_span = self.hint_span;
+            let edge = self.edge_region_at(t);
             let panel = self.panel_rect;
             // Phase-aware: streams may paint the scramble front; settled ink is guarded.
             // Snapshot guard decisions so we don't need to borrow messages while drawing.
@@ -1394,8 +1430,18 @@ impl App {
 
             for s in &mut self.streams {
                 let guard_fn = |row: isize, x: isize| -> bool {
-                    if status_row == Some(row) {
+                    if footer_row == Some(row) {
                         return true;
+                    }
+                    if let Some((r, x0, x1)) = toast_span {
+                        if row == r && x >= x0 && x <= x1 {
+                            return true;
+                        }
+                    }
+                    if let Some((r, x0, x1)) = hint_span {
+                        if row == r && x >= x0 && x <= x1 {
+                            return true;
+                        }
                     }
                     match edge {
                         Some(EdgeRegion::Horizontal { row: r, x0, x1 }) => {
@@ -1505,7 +1551,8 @@ impl App {
         let _ = self.term.present();
     }
 
-    /// Update whisper (right) and short toast (also right) on the bottom row.
+    /// Footer chrome: solid toast / update whisper on the bottom row only.
+    /// Never shares cells with rain — guards + full-pad paint + heal on expiry.
     fn paint_footer_hints(&mut self, t: f64) {
         // Promote a pending release notice once.
         if let Some(offer) = self.updates.take_available() {
@@ -1516,31 +1563,68 @@ impl App {
             );
         }
 
+        let row = self.status_row();
         let dim = self.pal.dim;
-        // Prefer the status row; else the bottom edge bar; else the last row.
-        let row = if self.show_status {
-            self.status_row()
-        } else if let Some(EdgeRegion::Horizontal { row, .. }) = self.edge_region() {
-            if self.rain_ticker_edge == TickerEdge::Bottom {
-                row
-            } else {
-                self.status_row()
+        let max_x = self.w.saturating_sub(1).max(1) as isize;
+
+        // Expire toast → clear string and heal previous span so no ghost glyphs.
+        let (msg, until) = self.toast.clone();
+        if msg.is_empty() || t >= until {
+            if let Some((r, x0, x1)) = self.toast_span.take() {
+                self.heal_span(r, x0, x1, t);
+            }
+            if !msg.is_empty() && t >= until {
+                self.toast = (String::new(), 0.0);
             }
         } else {
-            self.status_row()
-        };
-
-        let (ref hint, hint_until, ref _url) = self.update_hint;
-        if !hint.is_empty() && t < hint_until {
-            let x = (self.w as isize - hint.chars().count() as isize - 1).max(0);
-            self.term.span_cells(row, x, dim, hint);
+            // Solid pad: full toast width every frame so rain cannot leave holes.
+            let shown = format!(" {msg} ");
+            let tw = shown.chars().count() as isize;
+            let x0 = (max_x - tw).max(0);
+            let x1 = (x0 + tw - 1).min(max_x - 1);
+            // If the span moved, heal the old region first.
+            if let Some((or, ox0, ox1)) = self.toast_span {
+                if or != row || ox0 != x0 || ox1 != x1 {
+                    self.heal_span(or, ox0, ox1, t);
+                }
+            }
+            self.term.span_cells(row, x0, dim, &shown);
+            self.toast_span = Some((row, x0, x1));
         }
 
-        let (ref msg, until) = self.toast;
-        if !msg.is_empty() && t < until {
-            let shown = format!(" {msg} ");
-            let x = (self.w as isize - shown.chars().count() as isize - 3).max(0);
-            self.term.span_cells(row, x, dim, &shown);
+        let (hint, hint_until, _url) = self.update_hint.clone();
+        if hint.is_empty() || t >= hint_until {
+            if let Some((r, x0, x1)) = self.hint_span.take() {
+                self.heal_span(r, x0, x1, t);
+            }
+            if !hint.is_empty() && t >= hint_until {
+                self.update_hint = (String::new(), 0.0, String::new());
+            }
+        } else if !self.toast_active(t) {
+            // Only show update whisper when no toast is covering the footer.
+            let tw = hint.chars().count() as isize;
+            let x0 = (max_x - tw).max(0);
+            let x1 = (x0 + tw - 1).min(max_x - 1);
+            if let Some((or, ox0, ox1)) = self.hint_span {
+                if or != row || ox0 != x0 || ox1 != x1 {
+                    self.heal_span(or, ox0, ox1, t);
+                }
+            }
+            self.term.span_cells(row, x0, dim, &hint);
+            self.hint_span = Some((row, x0, x1));
+        } else if let Some((r, x0, x1)) = self.hint_span.take() {
+            self.heal_span(r, x0, x1, t);
+        }
+    }
+
+    fn heal_span(&mut self, row: isize, x0: isize, x1: isize, t: f64) {
+        if row < 0 || row as usize >= self.h {
+            return;
+        }
+        let max_x = self.w.saturating_sub(1) as isize;
+        for x in x0.max(0)..=x1.min(max_x - 1) {
+            let (style, ch) = residue_at(row, x, t, &self.glyphs, &self.pal);
+            self.term.cell(row, x, style, ch);
         }
     }
 
@@ -2000,21 +2084,23 @@ impl App {
     }
 
     fn flash(&mut self, msg: &str, t: f64) {
-        self.flash_for(msg, t, 1.25);
+        self.flash_for(msg, t, 1.6);
     }
 
     fn flash_for(&mut self, msg: &str, t: f64, secs: f64) {
         // Toasts win the footer over a lingering update whisper.
         self.update_hint = (String::new(), 0.0, String::new());
         if msg.is_empty() {
-            self.toast = (String::new(), 0.0);
+            self.clear_toast();
         } else {
-            self.toast = (msg.to_string(), t + secs.max(0.4));
+            // New toast replaces old; heal prior span next paint via span mismatch.
+            self.toast = (msg.to_string(), t + secs.max(0.5));
         }
     }
 
     fn clear_toast(&mut self) {
         self.toast = (String::new(), 0.0);
+        // Span heal happens on next paint_footer_hints when toast_span is taken.
     }
 
     fn clear_row(&mut self, row: isize) {
