@@ -1449,7 +1449,7 @@ impl App {
                 }
                 m.draw(&mut self.term, t, &self.pal, &self.glyphs);
             }
-            self.messages.retain(|m| !m.done);
+            self.reap_messages(t);
         }
 
         // Status / toast sit under the modal and must not cover it either.
@@ -1544,9 +1544,17 @@ impl App {
     }
 
     fn open_summary(&mut self, link: Link, t: f64, origin: Option<(isize, isize)>) {
-        self.flash(
-            &format!("decoding {}…", if link.domain.is_empty() { "story" } else { &link.domain }),
+        self.flash_for(
+            &format!(
+                "decoding {}…",
+                if link.domain.is_empty() {
+                    "story"
+                } else {
+                    &link.domain
+                }
+            ),
             t,
+            1.0,
         );
         self.reader_req += 1;
         let tok = self.reader_req;
@@ -1589,6 +1597,8 @@ impl App {
         if tok != self.reader_req {
             return;
         }
+        // Clear "decoding…" toast as soon as the worker returns.
+        self.clear_toast();
         // No real blurb → toast only; never paint instructional prose into the rain.
         let Some(summary) = art.body.text().map(str::to_string) else {
             if let Some(msg) = art.body.toast() {
@@ -1653,8 +1663,18 @@ impl App {
         // (including the original headline), so the story can grow in place.
         let block_rows: std::collections::HashSet<isize> =
             (r0..r0 + k).collect();
+        // Heal rows of any messages we're removing so ink doesn't stick.
+        let mut heal: std::collections::HashSet<isize> = self
+            .messages
+            .iter()
+            .filter(|m| block_rows.contains(&m.row))
+            .map(|m| m.row)
+            .collect();
         self.messages
             .retain(|m| !block_rows.contains(&m.row));
+        for row in &heal {
+            self.fill_row_residue(*row, t);
+        }
 
         // Heal the field: if we bumped the block up away from the click, or
         // the origin row is no longer the title row, fill vacated rows with
@@ -1679,7 +1699,8 @@ impl App {
 
         self.block_seq += 1;
         let group = self.block_seq;
-        let dwell = 10.0 + 0.03 * summary.len() as f64;
+        // Story blocks linger, then wipe on a timer — no rain-ray wait.
+        let dwell = 7.0 + 0.02 * summary.len() as f64;
         for (i, (text, kind)) in block.into_iter().enumerate() {
             let row = r0 + i as isize;
             if row > bottom_max {
@@ -1698,12 +1719,16 @@ impl App {
                 self.w,
                 t,
                 Some(x0),
-                0.28 * i as f64,
+                0.0,
             );
             m.domain = art.domain.clone();
             m.group = Some(group);
             m.dwell = dwell;
+            m.ray_coupled = false;
+            // Appear immediately — do not wait for a write-ray.
+            m.finish_reveal(t);
             self.messages.push(m);
+            heal.remove(&row);
         }
     }
 
@@ -1720,11 +1745,33 @@ impl App {
         }
     }
 
-    fn dismiss_summaries(&mut self, group: Option<u64>) {
+    fn dismiss_summaries(&mut self, group: Option<u64>, t: f64) {
+        let mut heal = std::collections::HashSet::new();
         for m in &mut self.messages {
             if m.group.is_some() && (group.is_none() || m.group == group) {
-                m.force_erase();
+                heal.insert(m.row);
+                m.finish_dismiss();
             }
+        }
+        self.reap_messages(t);
+        for row in heal {
+            self.fill_row_residue(row, t);
+        }
+    }
+
+    /// Drop finished messages and paint residue where their ink lived.
+    fn reap_messages(&mut self, t: f64) {
+        let mut heal = std::collections::HashSet::new();
+        self.messages.retain(|m| {
+            if m.done {
+                heal.insert(m.row);
+                false
+            } else {
+                true
+            }
+        });
+        for row in heal {
+            self.fill_row_residue(row, t);
         }
     }
 
@@ -1734,7 +1781,7 @@ impl App {
             if m.row == y && m.x0 - 1 <= x && x <= m.x0 + n {
                 if m.group.is_some() {
                     let g = m.group;
-                    self.dismiss_summaries(g);
+                    self.dismiss_summaries(g, t);
                     return;
                 }
                 if let Some(ref url) = m.url {
@@ -1943,9 +1990,21 @@ impl App {
     }
 
     fn flash(&mut self, msg: &str, t: f64) {
+        self.flash_for(msg, t, 1.25);
+    }
+
+    fn flash_for(&mut self, msg: &str, t: f64, secs: f64) {
         // Toasts win the footer over a lingering update whisper.
         self.update_hint = (String::new(), 0.0, String::new());
-        self.toast = (msg.to_string(), t + 2.5);
+        if msg.is_empty() {
+            self.toast = (String::new(), 0.0);
+        } else {
+            self.toast = (msg.to_string(), t + secs.max(0.4));
+        }
+    }
+
+    fn clear_toast(&mut self) {
+        self.toast = (String::new(), 0.0);
     }
 
     fn clear_row(&mut self, row: isize) {
@@ -2182,9 +2241,9 @@ impl App {
             if self
                 .messages
                 .iter()
-                .any(|m| m.group.is_some() && !m.is_erasing())
+                .any(|m| m.group.is_some() && !m.done)
             {
-                self.dismiss_summaries(None);
+                self.dismiss_summaries(None, t);
                 return true;
             }
             return false;
@@ -2440,17 +2499,20 @@ impl App {
                     f.wake();
                 }
             }
-            // Surface feed status early.
+            // Brief startup hint only — don't leave "fetching rss" stuck for long.
             let (_, _, status, _) = self.feed.snapshot();
             if status.contains("poetic only") || status.contains("unreachable") {
-                self.flash(&status, 0.0);
+                self.flash_for(&status, 0.0, 1.5);
+            } else if status.contains("cached") {
+                // Already have headlines — skip noisy boot toast.
             } else if !self.cfg.places.is_empty() {
-                self.flash(
-                    &format!("places: {} — fetching rss…", self.cfg.places.join(", ")),
+                self.flash_for(
+                    &format!("places: {} — fetching…", self.cfg.places.join(", ")),
                     0.0,
+                    1.0,
                 );
             } else {
-                self.flash("fetching rss…", 0.0);
+                self.flash_for("fetching…", 0.0, 0.9);
             }
         }
         let mut last = monotonic();
