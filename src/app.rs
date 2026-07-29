@@ -30,7 +30,8 @@ const HELP: &[&str] = &[
     " meanwhile — things happening right now ",
     "",
     "  q        quit              space   pause",
-    "  $        ticker mode       (pure stock marquee — no rain)",
+    "  $        pure ticker mode  (full-screen quotes — no rain)",
+    "  #        rain ticker strip (quotes along the bottom)",
     "  click    decode a story    shift-click  open in browser",
     "  enter    pick one to decode",
     "  t        edit topics       g       edit places (local intel)",
@@ -40,7 +41,7 @@ const HELP: &[&str] = &[
     "  s        status bar        d       feed debug log",
     "  ?        help",
     "",
-    "  ticker: classic scrolling quotes · $ returns to rain",
+    "  rain keeps a quote strip; $ is full-screen ticker only",
     "  CLI: meanwhile --ticker   ·  meanwhile --saver   ·  --check-feeds",
 ];
 
@@ -128,6 +129,8 @@ pub struct App {
     spans: HashMap<isize, Vec<(isize, isize)>>,
     /// Pure stock marquee — no matrix field at all.
     ticker_mode: bool,
+    /// Session flag: scrolling quote strip at the bottom of rain mode.
+    rain_ticker_on: bool,
     stock_feed: Option<Arc<StockFeed>>,
     ticker_bands: Vec<TickerBand>,
     /// Generation of quote snapshot last painted into band tapes.
@@ -136,6 +139,8 @@ pub struct App {
     ticker_speed_idx: usize,
     /// Frames since last global one-cell step (all rows advance together).
     ticker_frame_accum: u32,
+    /// Sub-cell scroll accumulator for rain-mode strip (dt-based at rain fps).
+    rain_ticker_scroll_accum: f64,
     /// Screensaver: any real key/click exits (set from CLI `--saver`).
     pub saver: bool,
     /// Incomplete OSC colour reply split across `read`s — finish eating next time.
@@ -181,6 +186,7 @@ impl App {
         let h = term.h;
         let w = term.w;
         let ticker_mode = cfg.mode.eq_ignore_ascii_case("ticker");
+        let rain_ticker_on = cfg.rain_ticker;
         let mut term = term;
         term.set_styles(pal.sgr.clone());
         Self {
@@ -221,11 +227,13 @@ impl App {
             update_hint: (String::new(), 0.0, String::new()),
             spans: HashMap::new(),
             ticker_mode,
+            rain_ticker_on,
             stock_feed: None,
             ticker_bands: Vec::new(),
             ticker_gen: 0,
             ticker_speed_idx: TICKER_SPEED_DEFAULT_IDX,
             ticker_frame_accum: 0,
+            rain_ticker_scroll_accum: 0.0,
             saver: false,
             osc_tail: false,
             updates,
@@ -273,8 +281,142 @@ impl App {
         self.ticker_mode = false;
         self.ticker_bands.clear();
         self.ticker_frame_accum = 0;
+        self.ticker_gen = 0;
+        self.rain_ticker_scroll_accum = 0.0;
+        if self.rain_ticker_on {
+            self.ensure_stock_feed();
+            if let Some(ref f) = self.stock_feed {
+                f.set_symbols(self.cfg.tickers.clone());
+                f.wake();
+            }
+        }
         self.term.clear_screen();
-        self.flash("rain mode", t);
+        self.flash(
+            if self.rain_ticker_on {
+                "rain mode · quote strip on (# toggles)"
+            } else {
+                "rain mode · quote strip off (# toggles)"
+            },
+            t,
+        );
+    }
+
+    /// Bottom status row (when `s` status is shown).
+    fn status_row(&self) -> isize {
+        (self.h as isize - 1).max(0)
+    }
+
+    /// Rain-mode quote strip: just above the status bar, else on the bottom row.
+    fn rain_ticker_row(&self) -> isize {
+        let bottom = self.status_row();
+        if self.show_status {
+            (bottom - 1).max(0)
+        } else {
+            bottom
+        }
+    }
+
+    fn rain_ticker_active(&self) -> bool {
+        self.rain_ticker_on && !self.ticker_mode
+    }
+
+    /// Single scrolling band of all quotes for rain mode (bottom strip).
+    fn rebuild_rain_ticker_strip(&mut self) {
+        let Some(ref feed) = self.stock_feed else {
+            return;
+        };
+        let (mut quotes, _status, gen) = feed.snapshot();
+        quotes.sort_by(|a, b| {
+            a.symbol
+                .to_ascii_uppercase()
+                .cmp(&b.symbol.to_ascii_uppercase())
+        });
+
+        let row = self.rain_ticker_row();
+        let draw_w = self.w.saturating_sub(1).max(1);
+
+        let structure_ok = self.ticker_bands.len() == 1
+            && self.ticker_bands[0].row == row
+            && gen == self.ticker_gen
+            && !self.ticker_bands[0].cells.is_empty();
+        if structure_ok {
+            return;
+        }
+        self.ticker_gen = gen;
+
+        let mut cells: Vec<(char, StyleId)> = Vec::new();
+        if quotes.is_empty() {
+            for ch in "  fetching quotes…  ".chars() {
+                cells.push((ch, self.pal.amber));
+            }
+        } else {
+            for q in &quotes {
+                cells.extend(self.quote_to_cells(q));
+            }
+        }
+        while cells.len() < draw_w {
+            cells.push((' ', self.pal.blank));
+        }
+        for _ in 0..(draw_w / 4).max(4) {
+            cells.push((' ', self.pal.blank));
+        }
+
+        let len = cells.len().max(1) as isize;
+        let prev_offset = self
+            .ticker_bands
+            .first()
+            .map(|b| b.offset.rem_euclid(len))
+            .unwrap_or(0);
+        self.ticker_bands = vec![TickerBand {
+            row,
+            offset: prev_offset,
+            dir: 1,
+            cells,
+        }];
+    }
+
+    fn tick_rain_ticker(&mut self, dt: f64) {
+        if !self.rain_ticker_active() {
+            return;
+        }
+        self.ensure_stock_feed();
+        self.rebuild_rain_ticker_strip();
+        // Rain runs ~8 fps; advance by wall-clock so strip speed matches pure ticker.
+        self.rain_ticker_scroll_accum += dt * self.ticker_cells_per_sec();
+        while self.rain_ticker_scroll_accum >= 1.0 {
+            self.rain_ticker_scroll_accum -= 1.0;
+            for b in &mut self.ticker_bands {
+                let len = b.cells.len().max(1) as isize;
+                b.offset = (b.offset + b.dir).rem_euclid(len);
+            }
+        }
+    }
+
+    fn draw_rain_ticker_strip(&mut self) {
+        if !self.rain_ticker_active() {
+            return;
+        }
+        // Keep layout current if status bar toggled mid-session.
+        if self.ticker_bands.len() != 1
+            || self.ticker_bands.first().map(|b| b.row) != Some(self.rain_ticker_row())
+        {
+            self.rebuild_rain_ticker_strip();
+        }
+        let draw_w = self.w.saturating_sub(1);
+        let blank = self.pal.blank;
+        for band in &self.ticker_bands {
+            let n = band.cells.len() as isize;
+            if n == 0 {
+                continue;
+            }
+            let spaces = " ".repeat(draw_w);
+            self.term.span_cells(band.row, 0, blank, &spaces);
+            for x in 0..draw_w {
+                let idx = (band.offset + x as isize).rem_euclid(n) as usize;
+                let (ch, style) = band.cells[idx];
+                self.term.cell(band.row, x as isize, style, ch);
+            }
+        }
     }
 
     /// Wipe the whole field to blank — used so ticker never sits on matrix residue.
@@ -558,7 +700,10 @@ impl App {
     }
 
     fn guard(&self, row: isize, x: isize) -> bool {
-        if row == self.h as isize - 1 && self.show_status {
+        if self.show_status && row == self.status_row() {
+            return true;
+        }
+        if self.rain_ticker_active() && row == self.rain_ticker_row() {
             return true;
         }
         // Modal panels (help, debug, editors, picker) own their rectangle —
@@ -664,20 +809,34 @@ impl App {
         }
         let taken: std::collections::HashSet<isize> =
             self.messages.iter().map(|m| m.row).collect();
-        // Prefer rows outside an open modal so new headlines aren't invisible.
+        // Prefer rows outside an open modal / reserved chrome so headlines stay visible.
         let panel = self.panel_rect;
-        let free_of_panel = |r: isize| -> bool {
+        let status_r = if self.show_status {
+            Some(self.status_row())
+        } else {
+            None
+        };
+        let ticker_r = if self.rain_ticker_active() {
+            Some(self.rain_ticker_row())
+        } else {
+            None
+        };
+        let free_row = |r: isize| -> bool {
+            if status_r == Some(r) || ticker_r == Some(r) {
+                return false;
+            }
             match panel {
                 Some((y0, _, y1, _)) => r < y0 || r > y1,
                 None => true,
             }
         };
-        let candidates: Vec<isize> = (1..(self.h as isize - 2))
-            .filter(|r| !taken.contains(r) && free_of_panel(*r))
+        let bottom = (self.h as isize - 2).max(1);
+        let candidates: Vec<isize> = (1..bottom)
+            .filter(|r| !taken.contains(r) && free_row(*r))
             .collect();
         let candidates = if candidates.is_empty() {
             // Fall back if the panel covers almost every row.
-            (1..(self.h as isize - 2))
+            (1..bottom)
                 .filter(|r| !taken.contains(r))
                 .collect()
         } else {
@@ -786,30 +945,31 @@ impl App {
             self.trigger_wake(t);
             return;
         }
-        if self.paused {
-            return;
+        // Quote strip keeps moving even while rain is paused (like a real ticker).
+        if !self.paused {
+            let mult = self.cfg.speed;
+            // Density-scaled streams with a hard cap so large splits stay quiet.
+            // Keep spawning under modals so the field doesn't thin while help is open.
+            let target = 4
+                .max((self.h as f64 * self.cfg.density * 1.1) as usize)
+                .min(20);
+            while self.streams.len() < target && rand::thread_rng().gen::<f64>() < 0.35 {
+                let eraser = rand::thread_rng().gen::<f64>() < 0.22;
+                self.streams.push(Noise::new(self.h, self.w, eraser));
+            }
+            for s in &mut self.streams {
+                s.update(dt, mult);
+            }
+            for m in &mut self.messages {
+                m.update(t, dt, mult);
+            }
+            if t >= self.next_msg {
+                self.spawn_message(t, None);
+                self.next_msg =
+                    t + self.cfg.message_every_seconds * rand::thread_rng().gen_range(0.7..1.4);
+            }
         }
-        let mult = self.cfg.speed;
-        // Density-scaled streams with a hard cap so large splits stay quiet.
-        // Keep spawning under modals so the field doesn't thin while help is open.
-        let target = 4
-            .max((self.h as f64 * self.cfg.density * 1.1) as usize)
-            .min(20);
-        while self.streams.len() < target && rand::thread_rng().gen::<f64>() < 0.35 {
-            let eraser = rand::thread_rng().gen::<f64>() < 0.22;
-            self.streams.push(Noise::new(self.h, self.w, eraser));
-        }
-        for s in &mut self.streams {
-            s.update(dt, mult);
-        }
-        for m in &mut self.messages {
-            m.update(t, dt, mult);
-        }
-        if t >= self.next_msg {
-            self.spawn_message(t, None);
-            self.next_msg =
-                t + self.cfg.message_every_seconds * rand::thread_rng().gen_range(0.7..1.4);
-        }
+        self.tick_rain_ticker(dt);
     }
 
     fn draw(&mut self, t: f64) {
@@ -880,14 +1040,22 @@ impl App {
             }
 
             // Shared guard snapshot for this frame (one small clone, not per stream).
-            let h = self.h;
-            let show_status = self.show_status;
+            let status_row = if self.show_status {
+                Some(self.status_row())
+            } else {
+                None
+            };
+            let ticker_row = if self.rain_ticker_active() {
+                Some(self.rain_ticker_row())
+            } else {
+                None
+            };
             let panel = self.panel_rect;
             let spans = self.spans.clone();
 
             for s in &mut self.streams {
                 let guard_fn = |row: isize, x: isize| -> bool {
-                    if row == h as isize - 1 && show_status {
+                    if status_row == Some(row) || ticker_row == Some(row) {
                         return true;
                     }
                     if let Some((y0, x0, y1, x1)) = panel {
@@ -962,7 +1130,12 @@ impl App {
             }
             let dim = self.pal.dim;
             self.term
-                .span_cells(self.h as isize - 1, 0, dim, &display);
+                .span_cells(self.status_row(), 0, dim, &display);
+        }
+
+        // Quote strip after rain (and status), before modals.
+        if !self.panel_open() {
+            self.draw_rain_ticker_strip();
         }
 
         if !self.panel_open() {
@@ -987,7 +1160,14 @@ impl App {
         }
 
         let dim = self.pal.dim;
-        let row = self.h as isize - 1;
+        // Prefer the status row; if the quote strip owns the bottom, toast sits there.
+        let row = if self.show_status {
+            self.status_row()
+        } else if self.rain_ticker_active() {
+            self.rain_ticker_row()
+        } else {
+            self.status_row()
+        };
 
         let (ref hint, hint_until, ref _url) = self.update_hint;
         if !hint.is_empty() && t < hint_until {
@@ -1755,12 +1935,45 @@ impl App {
                 self.flash("refreshing quotes…", t);
             } else {
                 self.feed.wake();
-                self.flash("refreshing headlines…", t);
+                if self.rain_ticker_on {
+                    if let Some(ref f) = self.stock_feed {
+                        f.wake();
+                    }
+                    self.flash("refreshing headlines + quotes…", t);
+                } else {
+                    self.flash("refreshing headlines…", t);
+                }
             }
         } else if b == b's' {
             self.show_status = !self.show_status;
             if !self.show_status {
-                self.clear_row(self.h as isize - 1);
+                self.clear_row(self.status_row());
+            }
+            // Status toggles reclaim/relinquish a bottom row — rebuild strip position.
+            if self.rain_ticker_active() {
+                self.ticker_gen = 0;
+            }
+        } else if b == b'#' {
+            if self.ticker_mode {
+                self.flash("# is for rain quote strip · $ returns to rain", t);
+            } else {
+                let strip_row = self.rain_ticker_row();
+                self.rain_ticker_on = !self.rain_ticker_on;
+                self.cfg.rain_ticker = self.rain_ticker_on;
+                save_config(&self.cfg);
+                if self.rain_ticker_on {
+                    self.ensure_stock_feed();
+                    if let Some(ref f) = self.stock_feed {
+                        f.set_symbols(self.cfg.tickers.clone());
+                        f.wake();
+                    }
+                    self.ticker_gen = 0;
+                    self.flash("rain ticker on", t);
+                } else {
+                    self.ticker_bands.clear();
+                    self.clear_row(strip_row);
+                    self.flash("rain ticker off", t);
+                }
             }
         } else if b == b'd' {
             if self.ticker_mode {
@@ -1797,6 +2010,13 @@ impl App {
         if self.ticker_mode {
             self.enter_ticker_mode(0.0);
         } else {
+            if self.rain_ticker_on {
+                self.ensure_stock_feed();
+                if let Some(ref f) = self.stock_feed {
+                    f.set_symbols(self.cfg.tickers.clone());
+                    f.wake();
+                }
+            }
             // Surface feed status early.
             let (_, _, status, _) = self.feed.snapshot();
             if status.contains("poetic only") || status.contains("unreachable") {

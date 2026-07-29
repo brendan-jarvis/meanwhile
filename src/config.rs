@@ -55,6 +55,9 @@ pub struct Config {
     /// Yahoo Finance symbols for ticker mode (e.g. AAPL, SPY, BTC-USD, FBU.NZ).
     #[serde(default = "default_tickers")]
     pub tickers: Vec<String>,
+    /// Scrolling quote strip along the bottom while raining (pure `$` mode is separate).
+    #[serde(default = "default_rain_ticker")]
+    pub rain_ticker: bool,
     #[serde(default = "default_mouse")]
     pub mouse: bool,
     /// One cached GitHub release check per day (soft toast). Set false to opt out.
@@ -84,6 +87,10 @@ fn default_tickers() -> Vec<String> {
     vec!["SP500".into()]
 }
 
+fn default_rain_ticker() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -111,6 +118,7 @@ impl Default for Config {
             extra_feeds: vec![],
             mode: "rain".into(),
             tickers: default_tickers(),
+            rain_ticker: true,
             mouse: true,
             check_updates: true,
         }
