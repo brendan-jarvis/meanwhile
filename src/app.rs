@@ -1,5 +1,5 @@
 use crate::config::{save_config, Config};
-use crate::news::{fetch_summary, Headline, Newsfeed};
+use crate::news::{fetch_summary, DecodeBody, Headline, Newsfeed};
 use crate::poetic::poetic_line;
 use crate::rain::{residue_at, Glyphs, Message, Noise};
 use crate::stocks::{Quote, StockFeed};
@@ -135,7 +135,7 @@ struct Link {
 struct Article {
     title: String,
     domain: String,
-    summary: String,
+    body: DecodeBody,
     url: String,
     /// Where the user clicked / the headline sat — summary expands from here.
     origin_row: Option<isize>,
@@ -1563,7 +1563,7 @@ impl App {
         thread::Builder::new()
             .name("summary".into())
             .spawn(move || {
-                let (title, domain, summary, url) = fetch_summary(
+                let outcome = fetch_summary(
                     &api_key,
                     &url,
                     &text,
@@ -1573,10 +1573,10 @@ impl App {
                 *pending.lock().unwrap() = Some((
                     tok,
                     Article {
-                        title,
-                        domain,
-                        summary,
-                        url,
+                        title: outcome.title,
+                        domain: outcome.domain,
+                        body: outcome.body,
+                        url: outcome.url,
                         origin_row,
                         origin_x0,
                     },
@@ -1589,8 +1589,15 @@ impl App {
         if tok != self.reader_req {
             return;
         }
+        // No real blurb → toast only; never paint instructional prose into the rain.
+        let Some(summary) = art.body.text().map(str::to_string) else {
+            if let Some(msg) = art.body.toast() {
+                self.flash(msg, t);
+            }
+            return;
+        };
         let width = 30.max((self.w.saturating_sub(16)).min(72));
-        let wrapped = textwrap::wrap(&art.summary, width);
+        let wrapped = textwrap::wrap(&summary, width);
         let lines: Vec<_> = wrapped.into_iter().take(6).collect();
         let mut block: Vec<(String, String)> = vec![(
             art.title.chars().take(width).collect(),
@@ -1672,7 +1679,7 @@ impl App {
 
         self.block_seq += 1;
         let group = self.block_seq;
-        let dwell = 10.0 + 0.03 * art.summary.len() as f64;
+        let dwell = 10.0 + 0.03 * summary.len() as f64;
         for (i, (text, kind)) in block.into_iter().enumerate() {
             let row = r0 + i as isize;
             if row > bottom_max {

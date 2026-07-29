@@ -1306,34 +1306,94 @@ pub fn clean_title(raw: &str) -> String {
     t
 }
 
-/// Decode a story: prefer feed blurb; optional Exa summary if a key is set.
+/// Body of a decoded story — never instructional UI copy.
+#[derive(Debug, Clone)]
+pub enum DecodeBody {
+    /// Real blurb from the feed description/summary.
+    Feed(String),
+    /// Richer summary from optional Exa contents.
+    Exa(String),
+    /// Feed had no usable description (and no Exa key / Exa not used).
+    EmptyFeed,
+    /// Had a key (or needed remote decode) but nothing came back.
+    Unavailable,
+}
+
+#[derive(Debug, Clone)]
+pub struct DecodeOutcome {
+    pub title: String,
+    pub domain: String,
+    pub url: String,
+    pub body: DecodeBody,
+}
+
+impl DecodeBody {
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            DecodeBody::Feed(s) | DecodeBody::Exa(s) => Some(s.as_str()),
+            DecodeBody::EmptyFeed | DecodeBody::Unavailable => None,
+        }
+    }
+
+    /// Short toast for the UI chrome — not painted into the rain.
+    pub fn toast(&self) -> Option<&'static str> {
+        match self {
+            DecodeBody::Feed(_) | DecodeBody::Exa(_) => None,
+            DecodeBody::EmptyFeed => Some("no blurb in feed · shift-click to open"),
+            DecodeBody::Unavailable => Some("summary unavailable · shift-click to open"),
+        }
+    }
+}
+
+/// Non-empty feed blurb after trim / whitespace collapse / junk filter.
+fn usable_blurb(raw: Option<&str>) -> Option<String> {
+    let s = raw?.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let cleaned: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.is_empty() {
+        return None;
+    }
+    let lower = cleaned.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "..." | "…" | "read more" | "continue reading" | "full story" | "click here"
+    ) {
+        return None;
+    }
+    Some(cleaned)
+}
+
+/// Decode a story: prefer feed blurb; optional Exa when a key is set.
+/// Failures are typed — the UI flashes a toast instead of mounting fake rain text.
 pub fn fetch_summary(
     api_key: &str,
     url: &str,
     fallback_title: &str,
     domain: &str,
     feed_summary: Option<&str>,
-) -> (String, String, String, String) {
-    if let Some(s) = feed_summary.map(str::trim).filter(|s| s.len() > 40) {
-        return (
-            fallback_title.to_string(),
-            domain.to_string(),
-            s.to_string(),
-            url.to_string(),
-        );
+) -> DecodeOutcome {
+    let title = fallback_title.to_string();
+    let domain = domain.to_string();
+    let url = url.to_string();
+
+    if let Some(s) = usable_blurb(feed_summary) {
+        return DecodeOutcome {
+            title,
+            domain,
+            url,
+            body: DecodeBody::Feed(s),
+        };
     }
 
     if api_key.is_empty() {
-        return (
-            fallback_title.to_string(),
-            domain.to_string(),
-            if let Some(s) = feed_summary.map(str::trim).filter(|s| !s.is_empty()) {
-                s.to_string()
-            } else {
-                "(no summary in the feed — shift-click the headline to open the story)".into()
-            },
-            url.to_string(),
-        );
+        return DecodeOutcome {
+            title,
+            domain,
+            url,
+            body: DecodeBody::EmptyFeed,
+        };
     }
 
     // Optional Exa contents summary when a key is available.
@@ -1361,21 +1421,31 @@ pub fn fetch_summary(
                 .and_then(|t| t.as_str())
                 .map(clean_title)
                 .filter(|t| !t.is_empty())
-                .unwrap_or_else(|| fallback_title.to_string());
-            let summary = r
+                .unwrap_or(title);
+            match r
                 .and_then(|x| x.get("summary"))
                 .and_then(|s| s.as_str())
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "(no summary could be decoded)".into());
-            (title, domain.to_string(), summary, url.to_string())
+                .and_then(|s| usable_blurb(Some(s)))
+            {
+                Some(summary) => DecodeOutcome {
+                    title,
+                    domain,
+                    url,
+                    body: DecodeBody::Exa(summary),
+                },
+                None => DecodeOutcome {
+                    title,
+                    domain,
+                    url,
+                    body: DecodeBody::Unavailable,
+                },
+            }
         }
-        Err(_) => (
-            fallback_title.to_string(),
-            domain.to_string(),
-            "(the summary could not be decoded — shift-click the headline to open the story)"
-                .into(),
-            url.to_string(),
-        ),
+        Err(_) => DecodeOutcome {
+            title,
+            domain,
+            url,
+            body: DecodeBody::Unavailable,
+        },
     }
 }

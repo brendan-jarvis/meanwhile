@@ -233,9 +233,11 @@ culture, or a country name. Technology includes **Hacker News** top-of-list
 items via the free Firebase API (not `hnrss/best`, which is a longer-horizon
 ranking). Topic `hacker news` / `hn` is HN-only.
 
-Add arbitrary feed URLs with `extra_feeds` in the config. Click decodes the
-feed blurb into the rain; an optional [Exa](https://exa.ai) key
-(`EXA_API_KEY`) only upgrades that summary. Pass `--offline` for poetic-only.
+Add arbitrary feed URLs with `extra_feeds` in the config. **Click** decodes the
+feed blurb into the rain when the feed has one; if not, a short toast points
+you at **shift-click** to open the article. An optional [Exa](https://exa.ai)
+key (`EXA_API_KEY`) can still supply a richer summary. Pass `--offline` for
+poetic-only.
 
 ## Ticker mode
 
@@ -401,9 +403,10 @@ meanwhile --check-feeds -v --places "New Zealand"
 
 ## Notes
 
-- Plain click decodes in-app; **shift-click opens the browser** (handled by
-  meanwhile so it works under WezTerm mouse tracking). OSC 8 is still emitted
-  as a bonus for terminals that honour it.
+- Plain click decodes a feed blurb into the rain when available; empty feeds
+  get a toast only (`no blurb · shift-click to open`). **Shift-click always
+  opens the browser** (handled by meanwhile so it works under WezTerm mouse
+  tracking). OSC 8 is still emitted as a bonus for terminals that honour it.
 - Help and other popups stay opaque while the rain keeps moving behind them.
 - News, poems, and quotes are **written and wiped by the rain cursor** as a
   stream head crosses their row (not a separate fade timer alone).
