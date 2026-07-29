@@ -1,6 +1,6 @@
 [package]
 name = "meanwhile"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "Horizontal matrix rain of things happening right now"
 license = "MIT"

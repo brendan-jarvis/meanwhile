@@ -144,22 +144,37 @@ impl Newsfeed {
     fn run(&self) {
         loop {
             if !self.offline {
-                self.fetch();
+                // Never let a fetch panic kill the news thread / starve the UI.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.fetch();
+                }));
+                if result.is_err() {
+                    if let Ok(mut g) = self.inner.0.lock() {
+                        if g.items.is_empty() {
+                            g.status = "news offline — poetic only".into();
+                        } else {
+                            g.status = "refresh panicked — using cache".into();
+                        }
+                    }
+                }
             }
             let minutes = self
                 .cfg
                 .lock()
-                .unwrap()
-                .refresh_minutes
+                .map(|c| c.refresh_minutes)
+                .unwrap_or(15.0)
                 .max(2.0 / 60.0);
             let wait = Duration::from_secs_f64(minutes * 60.0);
             let (lock, cvar) = &*self.inner;
-            let mut g = lock.lock().unwrap();
+            let Ok(mut g) = lock.lock() else {
+                thread::sleep(wait);
+                continue;
+            };
             let start = Instant::now();
             while !g.wake && start.elapsed() < wait {
                 let remaining = wait.saturating_sub(start.elapsed());
-                let result = cvar.wait_timeout(g, remaining).unwrap();
-                g = result.0;
+                let (guard, _) = cvar.wait_timeout(g, remaining).unwrap_or_else(|e| e.into_inner());
+                g = guard;
             }
             g.wake = false;
         }

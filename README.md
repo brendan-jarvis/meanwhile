@@ -62,6 +62,9 @@ Compared with the original Python prototype:
   less full-screen redraw work for WezTerm splits and similar PTYs.
 - **Prebuilt GitHub Releases** — Linux and macOS archives so people can run
   without a local `cargo build` (Windows via WSL).
+- **`--saver`** — cmatrix-style screensaver; any real key or click exits.
+- **Update whisper** — optional cached GitHub release check (opt out with
+  `check_updates: false` in config).
 
 The original AUR package name (`meanwhile-rain`) and the core ambient idea —
 news and poetic lines in horizontal matrix rain — remain the same lineage.
@@ -318,6 +321,7 @@ Set `"theme": "matrix"` (or `--theme matrix`) for classic phosphor green.
 | `tickers` | `SP500`, `SP250`, or explicit Yahoo symbols |
 | `env_files` | optional paths for `EXA_API_KEY` (summaries only) |
 | `mouse` | set `false` to leave the mouse alone |
+| `check_updates` | soft GitHub release toast (default **true**; set `false` to opt out) |
 
 `$` does **not** persist `mode` — only an explicit config edit or launching
 with a saved `"mode": "ticker"` changes the default launch. Prefer
@@ -334,6 +338,7 @@ meanwhile [OPTIONS]
       --offline          poetic lines only, no news fetch
       --ticker           pure stock marquee for this run (no matrix rain)
       --symbols <LIST>   Yahoo symbols / SP500 / SP250 for ticker mode
+  -s, --saver            screensaver — any key or click exits
       --ascii            ASCII glyphs (no katakana)
       --topics <TOPICS>  comma-separated topics, overrides config
       --places <PLACES>  comma-separated places for local intel
@@ -343,6 +348,11 @@ meanwhile [OPTIONS]
       --check-feeds      fetch once, print diagnostics, exit (no TUI)
   -h, --help
   -V, --version
+```
+
+```sh
+# leave it running on a spare pane — any key wakes
+meanwhile --saver
 ```
 
 ### Debugging feeds

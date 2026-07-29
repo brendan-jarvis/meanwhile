@@ -8,6 +8,7 @@ use crate::theme::{
     build_palette, load_auto_theme, query_terminal_theme, theme_sources_mtime, ThemeColors,
     Palette, GLYPHS_ASCII, GLYPHS_KATA,
 };
+use crate::update::UpdateChecker;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use std::collections::HashMap;
@@ -40,7 +41,7 @@ const HELP: &[&str] = &[
     "  ?        help",
     "",
     "  ticker: classic scrolling quotes · $ returns to rain",
-    "  CLI: meanwhile --ticker   ·  meanwhile --check-feeds",
+    "  CLI: meanwhile --ticker   ·  meanwhile --saver   ·  --check-feeds",
 ];
 
 struct TickerBand {
@@ -122,6 +123,8 @@ pub struct App {
     news_on: bool,
     poetic_on: bool,
     toast: (String, f64),
+    /// Soft update whisper: (message, until_monotonic, url).
+    update_hint: (String, f64, String),
     spans: HashMap<isize, Vec<(isize, isize)>>,
     /// Pure stock marquee — no matrix field at all.
     ticker_mode: bool,
@@ -133,6 +136,11 @@ pub struct App {
     ticker_speed_idx: usize,
     /// Frames since last global one-cell step (all rows advance together).
     ticker_frame_accum: u32,
+    /// Screensaver: any real key/click exits (set from CLI `--saver`).
+    pub saver: bool,
+    /// Incomplete OSC colour reply split across `read`s — finish eating next time.
+    osc_tail: bool,
+    updates: Arc<UpdateChecker>,
 }
 
 /// Fixed ticker redraw rate — speed steps are integer frames-per-cell at this fps.
@@ -145,7 +153,12 @@ const TICKER_FRAMES_PER_STEP: &[u32] = &[16, 12, 8, 6, 4, 3, 2, 1];
 const TICKER_SPEED_DEFAULT_IDX: usize = 2;
 
 impl App {
-    pub fn new(term: Term, cfg: Config, feed: Arc<Newsfeed>) -> Self {
+    pub fn new(
+        term: Term,
+        cfg: Config,
+        feed: Arc<Newsfeed>,
+        updates: Arc<UpdateChecker>,
+    ) -> Self {
         let basic = {
             let term_env = std::env::var("TERM").unwrap_or_default();
             let colorterm = std::env::var("COLORTERM").unwrap_or_default();
@@ -205,6 +218,7 @@ impl App {
             news_on: true,
             poetic_on: true,
             toast: (String::new(), 0.0),
+            update_hint: (String::new(), 0.0, String::new()),
             spans: HashMap::new(),
             ticker_mode,
             stock_feed: None,
@@ -212,6 +226,9 @@ impl App {
             ticker_gen: 0,
             ticker_speed_idx: TICKER_SPEED_DEFAULT_IDX,
             ticker_frame_accum: 0,
+            saver: false,
+            osc_tail: false,
+            updates,
         }
     }
 
@@ -467,13 +484,7 @@ impl App {
                 .span_cells(self.h as isize - 1, 0, self.pal.dim, &display);
         }
 
-        let (ref msg, until) = self.toast;
-        if !msg.is_empty() && t < until {
-            let shown = format!(" {msg} ");
-            let x = (self.w as isize - shown.chars().count() as isize - 3).max(0);
-            self.term
-                .span_cells(self.h as isize - 1, x, self.pal.dim, &shown);
-        }
+        self.paint_footer_hints(t);
 
         if self.panel_open() {
             self.draw_panel();
@@ -936,19 +947,42 @@ impl App {
                 .span_cells(self.h as isize - 1, 0, dim, &display);
         }
 
-        let (ref msg, until) = self.toast;
-        if !msg.is_empty() && t < until && !self.panel_open() {
-            let dim = self.pal.dim;
-            let shown = format!(" {msg} ");
-            let x = (self.w as isize - shown.chars().count() as isize - 3).max(0);
-            self.term
-                .span_cells(self.h as isize - 1, x, dim, &shown);
+        if !self.panel_open() {
+            self.paint_footer_hints(t);
         }
 
         if self.panel_open() {
             self.draw_panel();
         }
         let _ = self.term.present();
+    }
+
+    /// Update whisper (right) and short toast (also right) on the bottom row.
+    fn paint_footer_hints(&mut self, t: f64) {
+        // Promote a pending release notice once.
+        if let Some(offer) = self.updates.take_available() {
+            self.update_hint = (
+                format!(" update {} available · github releases ", offer.tag),
+                t + 12.0,
+                offer.url,
+            );
+        }
+
+        let dim = self.pal.dim;
+        let row = self.h as isize - 1;
+
+        let (ref hint, hint_until, ref _url) = self.update_hint;
+        if !hint.is_empty() && t < hint_until {
+            let x = (self.w as isize - hint.chars().count() as isize - 1).max(0);
+            self.term.span_cells(row, x, dim, hint);
+        }
+
+        let (ref msg, until) = self.toast;
+        if !msg.is_empty() && t < until {
+            let shown = format!(" {msg} ");
+            let x = (self.w as isize - shown.chars().count() as isize - 3).max(0);
+            self.term.span_cells(row, x, dim, &shown);
+        }
     }
 
     fn open_summary(&mut self, link: Link, t: f64, origin: Option<(isize, isize)>) {
@@ -1344,6 +1378,8 @@ impl App {
     }
 
     fn flash(&mut self, msg: &str, t: f64) {
+        // Toasts win the footer over a lingering update whisper.
+        self.update_hint = (String::new(), 0.0, String::new());
         self.toast = (msg.to_string(), t + 2.5);
     }
 
@@ -1354,7 +1390,7 @@ impl App {
     }
 
     fn handle_bytes(&mut self, data: &[u8], t: f64) -> bool {
-        for tok in tokenize(data) {
+        for tok in tokenize(data, &mut self.osc_tail) {
             match tok {
                 Token::Mouse { btn, mx, my, press } => {
                     // SGR mouse: button = base (0=left) | 4=shift | 8=meta | 16=ctrl.
@@ -1801,8 +1837,16 @@ impl App {
                 let target = t + frame_budget;
                 let timeout = Duration::from_secs_f64((target - monotonic()).max(0.0));
                 let data = self.term.read(timeout);
-                if !data.is_empty() && !self.handle_bytes(&data, t) {
-                    break;
+                if !data.is_empty() {
+                    if self.saver {
+                        // Any real key/mouse ends the screensaver; OSC noise does not.
+                        let toks = tokenize(&data, &mut self.osc_tail);
+                        if !toks.is_empty() {
+                            break;
+                        }
+                    } else if !self.handle_bytes(&data, t) {
+                        break;
+                    }
                 }
                 // If present() ran long (busy terminal), yield extra so we don't
                 // stack frames and flood the PTY further.
@@ -1901,19 +1945,60 @@ enum Token {
     },
 }
 
-fn tokenize(data: &[u8]) -> Vec<Token> {
+/// Split raw input into key / CSI / mouse tokens.
+///
+/// OSC replies (`ESC ] … BEL` or `ESC ] … ESC \`) are swallowed so late
+/// colour-query answers never become keystrokes (and cannot exit `--saver`).
+/// When a reply is split across reads, `osc_tail` carries the unfinished state.
+fn tokenize(data: &[u8], osc_tail: &mut bool) -> Vec<Token> {
     let mut toks = Vec::new();
     let mut i = 0;
     let n = data.len();
+
+    if *osc_tail {
+        // Finish an OSC reply that split across reads. A bare `\` is the tail
+        // of ST here, not a key.
+        while i < n
+            && data[i] != 0x07
+            && data[i] != 0x5C
+            && !(data[i] == 27 && i + 1 < n && data[i + 1] == 0x5C)
+        {
+            i += 1;
+        }
+        if i < n {
+            i += if data[i] == 27 { 2 } else { 1 };
+            *osc_tail = false;
+        } else {
+            // Still waiting for BEL/ST.
+            return toks;
+        }
+    }
+
     while i < n {
         let b = data[i];
+        // OSC reply (e.g. late colour-query answer): swallow to BEL or ST.
+        if b == 27 && i + 1 < n && data[i + 1] == 0x5D {
+            let mut j = i + 2;
+            while j < n
+                && data[j] != 0x07
+                && !(data[j] == 27 && j + 1 < n && data[j + 1] == 0x5C)
+            {
+                j += 1;
+            }
+            if j >= n {
+                *osc_tail = true;
+                break;
+            }
+            i = j + if data[j] == 27 { 2 } else { 1 };
+            continue;
+        }
         if b == 27 && i + 1 < n && (data[i + 1] == 0x5B || data[i + 1] == 0x4F) {
             let mut j = i + 2;
             while j < n && !(0x40..=0x7E).contains(&data[j]) {
                 j += 1;
             }
             let final_b = if j < n { data[j] } else { 0 };
-            let params = &data[i + 2..j];
+            let params = &data[i + 2..j.min(n)];
             if (final_b == 0x4D || final_b == 0x6D) && params.starts_with(b"<") {
                 let s = String::from_utf8_lossy(&params[1..]);
                 let parts: Vec<_> = s.split(';').collect();
@@ -1934,7 +2019,7 @@ fn tokenize(data: &[u8]) -> Vec<Token> {
             } else {
                 toks.push(Token::Seq(final_b));
             }
-            i = j + 1;
+            i = if j < n { j + 1 } else { n };
         } else {
             toks.push(Token::Key(b));
             i += 1;

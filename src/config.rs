@@ -57,9 +57,16 @@ pub struct Config {
     pub tickers: Vec<String>,
     #[serde(default = "default_mouse")]
     pub mouse: bool,
+    /// One cached GitHub release check per day (soft toast). Set false to opt out.
+    #[serde(default = "default_check_updates")]
+    pub check_updates: bool,
 }
 
 fn default_mouse() -> bool {
+    true
+}
+
+fn default_check_updates() -> bool {
     true
 }
 
@@ -105,6 +112,7 @@ impl Default for Config {
             mode: "rain".into(),
             tickers: default_tickers(),
             mouse: true,
+            check_updates: true,
         }
     }
 }

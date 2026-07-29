@@ -6,6 +6,7 @@ mod rain;
 mod stocks;
 mod term;
 mod theme;
+mod update;
 
 use app::App;
 use clap::Parser;
@@ -14,6 +15,7 @@ use news::{run_feed_check, Newsfeed};
 use std::process;
 use std::sync::Arc;
 use term::{is_tty, Term};
+use update::UpdateChecker;
 
 /// meanwhile — horizontal matrix rain of things happening right now
 #[derive(Parser, Debug)]
@@ -58,6 +60,10 @@ struct Cli {
     /// comma-separated Yahoo symbols for --ticker (e.g. AAPL,SPY,BTC-USD)
     #[arg(long)]
     symbols: Option<String>,
+
+    /// screensaver mode — any key or click exits
+    #[arg(long, short = 's')]
+    saver: bool,
 }
 
 fn main() {
@@ -123,6 +129,11 @@ fn main() {
     ));
     feed.start();
 
+    // Soft release whisper (cached daily). Off offline / screensaver / config.
+    let updates = UpdateChecker::start(
+        !args.offline && !args.saver && cfg.check_updates,
+    );
+
     let term = match Term::new() {
         Ok(t) => t,
         Err(e) => {
@@ -131,7 +142,8 @@ fn main() {
         }
     };
 
-    let mut app = App::new(term, cfg, feed);
+    let mut app = App::new(term, cfg, feed, updates);
+    app.saver = args.saver;
     if let Err(e) = app.run() {
         eprintln!("meanwhile: {e}");
         process::exit(1);
